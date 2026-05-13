@@ -1,0 +1,242 @@
+# Novel Crawler
+
+CLI tool for downloading web novel chapters from public websites using CSS selector configuration.
+
+## Features
+
+- **Configurable selectors**: Per-site JSON config with CSS selectors for title, chapters, content
+- **Auto-resume**: Skips already-downloaded chapters, continues from where it left off
+- **Browser mode**: Playwright headless browser for sites with JavaScript challenges (Cloudflare)
+- **robots.txt respect**: Checks site crawl rules by default
+- **Atomic writes**: Crash-safe file output via temp file + rename
+- **Incremental manifest**: Real-time progress tracking in `manifest.json`
+
+## Requirements
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/) for dependency management
+- [Playwright](https://playwright.dev) (for `--browser` mode) — Chromium installed automatically
+
+## Setup
+
+```bash
+# Install dependencies
+uv sync
+
+# Install Playwright browser (for --browser mode)
+uv run playwright install chromium
+
+# Configure environment (optional)
+cp .env.example .env
+```
+
+### Environment Variables
+
+```env
+# Shared output directory for chapter text files
+NOVEL_SHARE_DIR=../share
+
+# Default max chapters per crawl (0 = unlimited)
+MAX_CHAPTERS=0
+
+# Use headless browser by default (true/false)
+USE_BROWSER=false
+```
+
+With this layout, three directories sit side by side:
+
+```text
+Personal/
+  share/
+  novel-crawler/
+  novel-translator/
+```
+
+## Usage
+
+### 1. Create a site config
+
+```bash
+mkdir -p configs
+cp examples/site-config.example.json configs/my-site.json
+```
+
+Edit `configs/my-site.json` with CSS selectors matching the target website:
+
+```json
+{
+  "name": "example-public-site",
+  "start_url": "https://example.com/novel/table-of-contents",
+  "novel_title_selector": "h1",
+  "author_selector": ".author",
+  "chapter_link_selector": ".chapter-list a",
+  "toc_next_selector": "a.next",
+  "chapter_title_selector": "h1",
+  "chapter_content_selector": ".chapter-content",
+  "remove_selectors": ["script", "style", ".ads"],
+  "same_domain": true,
+  "reverse_chapter_order": false,
+  "request_delay_seconds": 1.5,
+  "timeout_seconds": 60,
+  "retry_attempts": 3,
+  "retry_backoff_seconds": 2
+}
+```
+
+### 2. Test the config
+
+```bash
+uv run crawl my-site --dry-run --max 5
+```
+
+### 3. Download chapters
+
+```bash
+# Standard mode (urllib with browser headers)
+uv run crawl my-site
+
+# Browser mode (Playwright, for Cloudflare/JS challenges)
+uv run crawl my-site --browser
+
+# Download next 20 new chapters (skips don't count)
+uv run crawl my-site --browser --max 20
+
+# Re-download all chapters
+uv run crawl my-site --browser --overwrite
+```
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `target` | Config path or novel name (matches `configs/{novel}.json`) |
+| `-b, --browser` | Use headless browser (Playwright) for sites with JS challenges. Default: `USE_BROWSER` env |
+| `-m, --max N` | Stop after fetching N new chapters (skipped chapters don't count). Default: `MAX_CHAPTERS` env |
+| `--share-output PATH` | Override shared chapter output directory |
+| `--overwrite` | Re-download chapters even if files already exist |
+| `--fail-fast` | Stop on the first chapter error |
+| `--ignore-robots` | Skip robots.txt check (use only with permission) |
+| `--dry-run` | Discover chapters and print preview without downloading |
+
+## How it works
+
+1. Reads site config from `configs/{novel}.json`
+2. Fetches the table of contents page, extracts chapter links via CSS selector
+3. Paginates through TOC if `toc_next_selector` is set (up to `max_toc_pages`)
+4. For each chapter: fetches page, extracts content via selector, strips noise elements
+5. Writes `chapter_N.txt` to shared output directory (atomic write)
+6. Updates `manifest.json` after each chapter
+7. On resume: skips chapters where `chapter_N.txt` exists and is non-empty
+8. `--max` counts only newly fetched chapters, not skipped ones
+
+### Output
+
+Each crawl produces two output groups:
+
+- `../share/{novel}/`: Chapter text files for translator input
+- `output/{novel}/`: Crawler runtime state
+
+In `../share/{novel}/`:
+- `chapter_1.txt`, `chapter_2.txt`, ...: Individual chapter files
+
+In `output/{novel}/`:
+- `config.json`: Snapshot of the config used for this crawl
+- `metadata.json`: Novel title, author, source URL
+- `manifest.json`: Progress, discovered chapters, results, errors
+
+### Console output
+
+```
+[1/1001] Chapter title
+[2/1001] Chapter title
+[3/1001] Chapter title (fail: error message)
+Done: Novel Title (3 new, 60 skipped)
+```
+
+Skipped chapters are not printed. The summary line shows fetched vs skipped counts.
+
+## Config Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Site identifier, used for output directory |
+| `start_url` | Yes | Table of contents or chapter list page |
+| `chapter_link_selector` | Yes | CSS selector for chapter links in TOC |
+| `chapter_content_selector` | Yes | CSS selector for chapter body content |
+| `novel_title_selector` | No | CSS selector for novel title on TOC page |
+| `author_selector` | No | CSS selector for author name |
+| `toc_next_selector` | No | CSS selector for "next page" button on TOC |
+| `chapter_title_selector` | No | CSS selector for chapter title on chapter page |
+| `remove_selectors` | No | CSS selectors for elements to strip (ads, nav, etc.) |
+| `same_domain` | No | Only follow links on same domain (default: true) |
+| `reverse_chapter_order` | No | Reverse chapter order if TOC shows newest first |
+| `request_delay_seconds` | No | Delay between requests (default: 1.0) |
+| `timeout_seconds` | No | Request timeout (default: 30.0) |
+| `retry_attempts` | No | Retry count for network errors (default: 3) |
+| `retry_backoff_seconds` | No | Base backoff for retries (default: 2.0) |
+| `max_toc_pages` | No | Max TOC pages to paginate through (default: 50) |
+| `user_agent` | No | Custom User-Agent header |
+
+## Architecture
+
+```
+fetch → parse → extract → clean → write → track
+```
+
+| Component | Purpose |
+|-----------|---------|
+| `cli.py` | Argument parsing, entry points, progress display |
+| `config.py` | App-level Config (from_env) + SiteConfig (per-site JSON), python-dotenv |
+| `models/` | Data models: ChapterLink, NovelMetadata, ChapterResult, CrawlProgress |
+| `services/crawler.py` | NovelCrawler: chapter discovery, crawl loop, manifest tracking |
+| `services/http.py` | HttpClient: stdlib urllib, cookies, robots.txt, retry, encoding detection |
+| `services/browser.py` | BrowserFetcher: Playwright Chromium for JS-challenge sites |
+| `utils/text.py` | Text utilities: slugify, normalize, HTML-to-text conversion |
+
+## Project Structure
+
+```
+├── main.py                # Direct Python entry point
+├── src/
+│   ├── __init__.py
+│   ├── cli.py             # CLI with argparse (crawl / novel-crawler entry points)
+│   ├── config.py          # SiteConfig + python-dotenv + DEFAULT_SHARE_DIR
+│   ├── models/
+│   │   └── __init__.py    # ChapterLink, NovelMetadata, ChapterResult, CrawlResult, CrawlProgress
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── crawler.py     # NovelCrawler: discovery, crawl loop, manifest
+│   │   ├── http.py        # HttpClient: urllib-based fetcher with retry/cookies
+│   │   └── browser.py     # BrowserFetcher: Playwright Chromium fetcher
+│   └── utils/
+│       ├── __init__.py
+│       └── text.py        # slugify, normalize_text, html_to_plain_text
+├── tests/                 # Test suite grouped by component
+│   ├── test_cli.py        # CLI argument parsing, config resolution
+│   ├── test_crawler.py    # Crawl workflow, resume, overwrite, progress
+│   ├── test_env.py        # Config loading, defaults
+│   └── test_http.py       # HTTP retry behavior
+├── configs/               # Per-site JSON configurations
+├── examples/
+│   └── site-config.example.json  # Template config
+├── output/                # Crawler runtime state (manifest, metadata, config snapshots)
+└── .env.example           # Environment variable template
+```
+
+## Testing
+
+```bash
+uv run python -m unittest discover -s tests
+```
+
+Individual test files:
+
+```bash
+uv run python -m unittest tests/test_crawler.py
+uv run python -m unittest tests/test_http.py
+uv run python -m unittest tests/test_cli.py
+```
+
+## Notes
+
+Only use with websites that permit public access and allow crawling per their terms of service. If `robots.txt` blocks a URL, the crawler stops. The `--ignore-robots` flag should only be used when you have explicit permission from the site owner.

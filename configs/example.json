@@ -1,0 +1,23 @@
+{
+  "name": "example-public-site",
+  "start_url": "https://example.com/novel/table-of-contents",
+  "novel_title_selector": "h1",
+  "author_selector": ".author",
+  "chapter_link_selector": ".chapter-list a",
+  "toc_next_selector": "a.next",
+  "chapter_title_selector": "h1",
+  "chapter_content_selector": ".chapter-content",
+  "remove_selectors": [
+    "script",
+    "style",
+    ".ads",
+    ".share",
+    ".chapter-nav"
+  ],
+  "same_domain": true,
+  "reverse_chapter_order": false,
+  "request_delay_seconds": 1.5,
+  "timeout_seconds": 30,
+  "max_toc_pages": 50,
+  "user_agent": "novel-crawler/0.1"
+}
