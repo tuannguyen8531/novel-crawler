@@ -12,6 +12,9 @@ wheels/
 # Local environment
 .env
 
+# Local logs
+logs/
+
 # Crawler output
 share/
 data/

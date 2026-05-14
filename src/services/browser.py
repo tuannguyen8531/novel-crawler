@@ -64,7 +64,17 @@ class BrowserFetcher:
                     raise FetchError(f"No response from page: {url}")
 
                 status = response.status
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+                body = page.content()
+                final_url = page.url
+
+                # Some sites return non-200 status but still render content
+                # via JavaScript. Only fail if the body is empty/trivial.
                 if status >= 400:
+                    has_content = body and len(body.strip()) > 500
+                    if has_content:
+                        # Page rendered despite error status — use it.
+                        break
                     if attempt < attempts:
                         self._retry_sleep(attempt)
                         continue
@@ -72,9 +82,6 @@ class BrowserFetcher:
                         f"HTTP {status} while fetching {url}"
                     )
 
-                page.wait_for_load_state("domcontentloaded", timeout=5000)
-                body = page.content()
-                final_url = page.url
                 break
             except FetchError:
                 raise

@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv(interpolate=True)
 
 
-DEFAULT_USER_AGENT = "novel-crawler/0.1 (+https://example.local)"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 
 
 @dataclass
@@ -26,6 +26,15 @@ class Config:
     share_dir: str | None = None
     max_chapters: int = 0  # 0 = no limit
     use_browser: bool = False
+    llm_provider: str = "ollama"
+    llm_temperature: float = 0.0
+    llm_max_tokens: int = 4096
+
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3"
+
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
 
     @property
     def share_path(self) -> Path | None:
@@ -37,6 +46,13 @@ class Config:
             share_dir=os.getenv("NOVEL_SHARE_DIR") or None,
             max_chapters=int(os.getenv("MAX_CHAPTERS") or "0"),
             use_browser=(os.getenv("USE_BROWSER") or "false").lower() in ("true", "1", "yes"),
+            llm_provider=os.getenv("LLM_PROVIDER") or "ollama",
+            llm_temperature=float(os.getenv("LLM_TEMPERATURE") or "0.0"),
+            llm_max_tokens=int(os.getenv("LLM_MAX_TOKENS") or "4096"),
+            ollama_base_url=os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434",
+            ollama_model=os.getenv("OLLAMA_MODEL") or "llama3",
+            gemini_api_key=os.getenv("GEMINI_API_KEY") or "",
+            gemini_model=os.getenv("GEMINI_MODEL") or "gemini-2.5-flash",
         )
 
 

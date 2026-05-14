@@ -5,6 +5,7 @@ CLI tool for downloading web novel chapters from public websites using CSS selec
 ## Features
 
 - **Configurable selectors**: Per-site JSON config with CSS selectors for title, chapters, content
+- **AI config generation**: Use Ollama or Gemini to auto-generate site configs from a TOC URL
 - **Auto-resume**: Skips already-downloaded chapters, continues from where it left off
 - **Browser mode**: Playwright headless browser for sites with JavaScript challenges (Cloudflare)
 - **robots.txt respect**: Checks site crawl rules by default
@@ -41,6 +42,19 @@ MAX_CHAPTERS=0
 
 # Use headless browser by default (true/false)
 USE_BROWSER=false
+
+# LLM provider for AI config generation (ollama or gemini)
+LLM_PROVIDER=gemini
+LLM_TEMPERATURE=0.0
+LLM_MAX_TOKENS=4096
+
+# Ollama settings (for LLM_PROVIDER=ollama)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3
+
+# Gemini settings (for LLM_PROVIDER=gemini)
+GEMINI_API_KEY=your-api-key
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 With this layout, three directories sit side by side:
@@ -55,6 +69,23 @@ Personal/
 ## Usage
 
 ### 1. Create a site config
+
+**Option A: AI-generated (recommended)**
+
+```bash
+# Use default LLM provider (from .env)
+uv run gen-config "https://example.com/novel/table-of-contents"
+
+# Specify provider and config name
+uv run gen-config "https://example.com/novel/toc" --provider gemini --name my-novel
+
+# Use browser for JS-heavy sites
+uv run gen-config "https://example.com/novel/toc" --browser
+```
+
+The AI analyzes the TOC page and a sample chapter page, then shows the generated config for review before saving.
+
+**Option B: Manual**
 
 ```bash
 mkdir -p configs
@@ -117,6 +148,16 @@ uv run crawl my-site --browser --overwrite
 | `--fail-fast` | Stop on the first chapter error |
 | `--ignore-robots` | Skip robots.txt check (use only with permission) |
 | `--dry-run` | Discover chapters and print preview without downloading |
+
+### gen-config Options
+
+| Flag | Description |
+|------|-------------|
+| `url` | URL of the novel's table-of-contents page |
+| `--name NAME` | Config name (default: derived from URL) |
+| `--provider PROVIDER` | LLM provider override (`ollama` or `gemini`) |
+| `-b, --browser` | Use headless browser to fetch pages |
+| `--output PATH` | Output directory (default: `configs`) |
 
 ## How it works
 
@@ -189,9 +230,12 @@ fetch → parse → extract → clean → write → track
 | `config.py` | App-level Config (from_env) + SiteConfig (per-site JSON), python-dotenv |
 | `models/` | Data models: ChapterLink, NovelMetadata, ChapterResult, CrawlProgress |
 | `services/crawler.py` | NovelCrawler: chapter discovery, crawl loop, manifest tracking |
+| `services/config_generator.py` | AI-assisted site config generation (2-phase: TOC + chapter) |
 | `services/http.py` | HttpClient: stdlib urllib, cookies, robots.txt, retry, encoding detection |
 | `services/browser.py` | BrowserFetcher: Playwright Chromium for JS-challenge sites |
+| `services/llm/` | LLM providers: Ollama, Gemini with retry, logging, spinner |
 | `utils/text.py` | Text utilities: slugify, normalize, HTML-to-text conversion |
+| `utils/html.py` | HTML cleaning for LLM analysis: strip noise, keep structure |
 
 ## Project Structure
 
@@ -199,18 +243,26 @@ fetch → parse → extract → clean → write → track
 ├── main.py                # Direct Python entry point
 ├── src/
 │   ├── __init__.py
-│   ├── cli.py             # CLI with argparse (crawl / novel-crawler entry points)
-│   ├── config.py          # SiteConfig + python-dotenv + DEFAULT_SHARE_DIR
+│   ├── cli.py             # CLI with argparse (crawl / gen-config / novel-crawler entry points)
+│   ├── config.py          # SiteConfig + python-dotenv + LLM settings
 │   ├── models/
 │   │   └── __init__.py    # ChapterLink, NovelMetadata, ChapterResult, CrawlResult, CrawlProgress
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── crawler.py     # NovelCrawler: discovery, crawl loop, manifest
+│   │   ├── config_generator.py  # AI config generator (2-phase: TOC + chapter)
 │   │   ├── http.py        # HttpClient: urllib-based fetcher with retry/cookies
-│   │   └── browser.py     # BrowserFetcher: Playwright Chromium fetcher
+│   │   ├── browser.py     # BrowserFetcher: Playwright Chromium fetcher
+│   │   └── llm/           # LLM provider abstraction
+│   │       ├── __init__.py
+│   │       ├── base.py    # BaseProvider: retry, logging, spinner
+│   │       ├── factory.py # Provider factory (ollama, gemini)
+│   │       ├── ollama.py  # OllamaProvider: local LLM via HTTP
+│   │       └── gemini.py  # GeminiProvider: Google AI API
 │   └── utils/
 │       ├── __init__.py
-│       └── text.py        # slugify, normalize_text, html_to_plain_text
+│       ├── text.py        # slugify, normalize_text, html_to_plain_text
+│       └── html.py        # HTML cleaning for LLM analysis
 ├── tests/                 # Test suite grouped by component
 │   ├── test_cli.py        # CLI argument parsing, config resolution
 │   ├── test_crawler.py    # Crawl workflow, resume, overwrite, progress

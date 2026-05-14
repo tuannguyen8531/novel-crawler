@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from src.config import SiteConfig, config
 from src.models import CrawlProgress
 from src.services.browser import BrowserFetcher
+from src.services.config_generator import ConfigGenerator
 from src.services.crawler import NovelCrawler
 from src.services.http import FetchError
+from src.services.llm import get_llm
 
 RUNTIME_OUTPUT_ROOT = Path("data")
 CONFIG_DIR = Path("configs")
@@ -24,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     crawl = subparsers.add_parser("crawl", help="Download a novel into text files.")
     _add_crawl_arguments(crawl, target_help="Config path or novel name from configs/{novel}.json.")
 
+    gen = subparsers.add_parser("gen-config", help="Use AI to generate a site config from a TOC URL.")
+    _add_gen_config_arguments(gen)
+
     return parser
 
 
@@ -33,6 +39,15 @@ def build_short_parser() -> argparse.ArgumentParser:
         description="Download chapters from public novel websites.",
     )
     _add_crawl_arguments(parser, target_help="Config path or novel name from configs/{novel}.json.")
+    return parser
+
+
+def build_gen_config_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gen-config",
+        description="Use AI to generate a site config from a TOC URL.",
+    )
+    _add_gen_config_arguments(parser)
     return parser
 
 
@@ -82,12 +97,37 @@ def _add_crawl_arguments(parser: argparse.ArgumentParser, *, target_help: str) -
     )
 
 
+def _add_gen_config_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("url", type=str, help="URL of the novel's table-of-contents page.")
+    parser.add_argument("--name", type=str, default=None, help="Config name (default: derived from URL).")
+    parser.add_argument(
+        "--provider",
+        type=str,
+        default=None,
+        help="LLM provider override (ollama/gemini).",
+    )
+    parser.add_argument(
+        "-b",
+        "--browser",
+        action="store_true",
+        help="Use headless browser to fetch pages.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=CONFIG_DIR,
+        help=f"Output directory (default: {CONFIG_DIR}).",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "crawl":
         return _crawl(args)
+    if args.command == "gen-config":
+        return _gen_config(args)
 
     parser.error(f"Unknown command: {args.command}")
     return 2
@@ -97,6 +137,12 @@ def crawl_main(argv: list[str] | None = None) -> int:
     parser = build_short_parser()
     args = parser.parse_args(argv)
     return _crawl(args)
+
+
+def gen_config_main(argv: list[str] | None = None) -> int:
+    parser = build_gen_config_parser()
+    args = parser.parse_args(argv)
+    return _gen_config(args)
 
 
 def _crawl(args: argparse.Namespace) -> int:
@@ -216,3 +262,50 @@ def _print_progress(progress: CrawlProgress) -> None:
         f"[{progress.current}/{progress.total}] {progress.title} ({progress.status})",
         flush=True,
     )
+
+
+def _gen_config(args: argparse.Namespace) -> int:
+    """Generate a site config using AI."""
+    try:
+        # Use override provider if --provider was given.
+        if args.provider:
+            from src.services.llm.factory import _create_provider
+            llm = _create_provider(args.provider)
+        else:
+            llm = get_llm()
+
+        generator = ConfigGenerator(llm, use_browser=args.browser)
+        config_dict = generator.generate(args.url, name=args.name)
+
+        # Validate before showing.
+        try:
+            ConfigGenerator.validate(config_dict)
+        except ValueError as e:
+            print(f"\n⚠  Validation warning: {e}", file=sys.stderr)
+
+        # Show result for review.
+        print(f"\n{'═' * 60}")
+        print("Generated config:")
+        print(f"{'═' * 60}")
+        print(json.dumps(config_dict, ensure_ascii=False, indent=2))
+        print(f"{'═' * 60}")
+
+        # Ask for confirmation.
+        output_dir: Path = args.output
+        name = config_dict.get("name", "generated")
+        dest = output_dir / f"{name}.json"
+        answer = input(f"\nSave to {dest}? [Y/n] ").strip().lower()
+        if answer in ("", "y", "yes"):
+            path = ConfigGenerator.save(config_dict, output_dir)
+            print(f"✅ Config saved to {path}")
+            return 0
+        else:
+            print("Cancelled.")
+            return 0
+
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        return 130
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1

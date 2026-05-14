@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.12.3",
+    "httpx>=0.28.1",
     "playwright>=1.49.0",
     "python-dotenv>=1.0.1",
 ]
@@ -13,6 +14,7 @@ dependencies = [
 [project.scripts]
 novel-crawler = "src.cli:main"
 crawl = "src.cli:crawl_main"
+gen-config = "src.cli:gen_config_main"
 
 [build-system]
 requires = ["hatchling"]
