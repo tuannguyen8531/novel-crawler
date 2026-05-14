@@ -10,7 +10,7 @@ from src.services.browser import BrowserFetcher
 from src.services.crawler import NovelCrawler
 from src.services.http import FetchError
 
-RUNTIME_OUTPUT_ROOT = Path("output")
+RUNTIME_OUTPUT_ROOT = Path("data")
 CONFIG_DIR = Path("configs")
 
 
@@ -130,7 +130,7 @@ def _crawl(args: argparse.Namespace) -> int:
 
 def _crawl_with_fetcher(
     site_config: SiteConfig, fetcher: object, args: argparse.Namespace,
-    max_chapters: int | None, share_root: Path,
+    max_chapters: int | None, share_root: Path | None,
 ) -> int:
     crawler = NovelCrawler(
         site_config,
@@ -142,7 +142,7 @@ def _crawl_with_fetcher(
 
 def _run_crawl(
     crawler: NovelCrawler, args: argparse.Namespace,
-    max_chapters: int | None, share_root: Path,
+    max_chapters: int | None, share_root: Path | None,
 ) -> int:
     try:
         if args.dry_run:

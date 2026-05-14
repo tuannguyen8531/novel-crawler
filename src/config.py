@@ -23,20 +23,20 @@ DEFAULT_USER_AGENT = "novel-crawler/0.1 (+https://example.local)"
 class Config:
     """Application-level configuration from environment."""
 
-    share_dir: str = "../share"
+    share_dir: str | None = None
     max_chapters: int = 0  # 0 = no limit
     use_browser: bool = False
 
     @property
-    def share_path(self) -> Path:
-        return Path(self.share_dir).expanduser()
+    def share_path(self) -> Path | None:
+        return Path(self.share_dir).expanduser() if self.share_dir else None
 
     @classmethod
     def from_env(cls) -> Config:
         return cls(
-            share_dir=os.getenv("NOVEL_SHARE_DIR", "../share"),
-            max_chapters=int(os.getenv("MAX_CHAPTERS", "0")),
-            use_browser=os.getenv("USE_BROWSER", "false").lower() in ("true", "1", "yes"),
+            share_dir=os.getenv("NOVEL_SHARE_DIR") or None,
+            max_chapters=int(os.getenv("MAX_CHAPTERS") or "0"),
+            use_browser=(os.getenv("USE_BROWSER") or "false").lower() in ("true", "1", "yes"),
         )
 
 

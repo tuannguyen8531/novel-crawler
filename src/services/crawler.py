@@ -103,7 +103,7 @@ class NovelCrawler:
         max_chapters: int | None = None,
         fail_fast: bool = False,
         overwrite: bool = False,
-        share_root: Path,
+        share_root: Path | None,
         progress_callback: ProgressCallback | None = None,
     ) -> CrawlResult:
         metadata, chapter_links = self.discover_chapters()
@@ -112,7 +112,10 @@ class NovelCrawler:
 
         novel_slug = slugify(metadata.title, fallback=slugify(self.config.name))
         novel_dir = output_root / novel_slug
-        chapter_output_dir = share_root / novel_slug
+        if share_root:
+            chapter_output_dir = share_root / "input" / novel_slug
+        else:
+            chapter_output_dir = novel_dir / "chapters"
         novel_dir.mkdir(parents=True, exist_ok=True)
         chapter_output_dir.mkdir(parents=True, exist_ok=True)
 

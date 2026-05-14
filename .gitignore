@@ -14,7 +14,7 @@ wheels/
 
 # Crawler output
 share/
-output/
+data/
 
 # Config files
 configs/*
