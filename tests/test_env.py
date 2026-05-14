@@ -10,7 +10,7 @@ class ConfigTest(unittest.TestCase):
     def test_defaults(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             cfg = Config.from_env()
-            self.assertEqual(cfg.share_dir, "../share")
+            self.assertIsNone(cfg.share_dir)
             self.assertEqual(cfg.max_chapters, 0)
             self.assertFalse(cfg.use_browser)
 
