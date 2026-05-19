@@ -80,7 +80,7 @@ class NovelCrawlerTest(unittest.TestCase):
         self.assertEqual(result.metadata.title, "Demo Novel")
         self.assertEqual(result.metadata.author, "Demo Author")
         self.assertEqual(len(result.chapters), 2)
-        self.assertTrue(result.chapters[0].path.endswith("share/input/demo-novel/chapter_1.txt"))
+        self.assertTrue(result.chapters[0].path.endswith("demo-novel/input/chapter_1.txt"))
         self.assertFalse(result.chapters[0].skipped)
         self.assertTrue(config_snapshot_exists)
         self.assertTrue(chapter_one.startswith("Chapter 1: Start\n\n"))

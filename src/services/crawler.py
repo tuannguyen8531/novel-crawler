@@ -113,7 +113,7 @@ class NovelCrawler:
         novel_slug = slugify(metadata.title, fallback=slugify(self.config.name))
         novel_dir = output_root / novel_slug
         if share_root:
-            chapter_output_dir = share_root / "input" / novel_slug
+            chapter_output_dir = share_root / novel_slug / "input"
         else:
             chapter_output_dir = novel_dir / "chapters"
         novel_dir.mkdir(parents=True, exist_ok=True)
