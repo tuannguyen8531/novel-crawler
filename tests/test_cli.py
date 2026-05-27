@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.cli import _resolve_config_path, build_short_parser
+from src.cli import _resolve_config_path, build_parser, build_short_parser
 
 
 class CliTest(unittest.TestCase):
@@ -23,6 +23,11 @@ class CliTest(unittest.TestCase):
             config_path.write_text("{}", encoding="utf-8")
 
             self.assertEqual(_resolve_config_path(str(config_path)), config_path)
+
+    def test_validate_parser_exists(self) -> None:
+        args = build_parser().parse_args(["validate", "demo"])
+        self.assertEqual(args.command, "validate")
+        self.assertEqual(args.target, "demo")
 
 
 if __name__ == "__main__":

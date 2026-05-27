@@ -74,13 +74,13 @@ Personal/
 
 ```bash
 # Use default LLM provider (from .env)
-uv run gen-config "https://example.com/novel/table-of-contents"
+uv run generate "https://example.com/novel/table-of-contents"
 
 # Specify provider and config name
-uv run gen-config "https://example.com/novel/toc" --provider gemini --name my-novel
+uv run generate "https://example.com/novel/toc" --provider gemini --name my-novel
 
 # Use browser for JS-heavy sites
-uv run gen-config "https://example.com/novel/toc" --browser
+uv run generate "https://example.com/novel/toc" --browser
 ```
 
 The AI analyzes the TOC page and a sample chapter page, then shows the generated config for review before saving.
@@ -117,6 +117,13 @@ Edit `configs/my-site.json` with CSS selectors matching the target website:
 ### 2. Test the config
 
 ```bash
+# Quick selector validation (1 TOC + 1 chapter fetch)
+uv run validate my-site
+
+# With browser for JS-heavy sites
+uv run validate my-site --browser
+
+# Full dry-run preview
 uv run crawl my-site --dry-run --max 5
 ```
 
@@ -149,7 +156,7 @@ uv run crawl my-site --browser --overwrite
 | `--ignore-robots` | Skip robots.txt check (use only with permission) |
 | `--dry-run` | Discover chapters and print preview without downloading |
 
-### gen-config Options
+### generate Options
 
 | Flag | Description |
 |------|-------------|
@@ -157,7 +164,15 @@ uv run crawl my-site --browser --overwrite
 | `--name NAME` | Config name (default: derived from URL) |
 | `--provider PROVIDER` | LLM provider override (`ollama` or `gemini`) |
 | `-b, --browser` | Use headless browser to fetch pages |
+| `--no-cache` | Skip the HTML cache and always re-fetch |
 | `--output PATH` | Output directory (default: `configs`) |
+
+### validate Options
+
+| Flag | Description |
+|------|-------------|
+| `target` | Config path or novel name (matches `configs/{novel}.json`) |
+| `-b, --browser` | Use headless browser to fetch pages |
 
 ## How it works
 
@@ -243,7 +258,7 @@ fetch → parse → extract → clean → write → track
 ├── main.py                # Direct Python entry point
 ├── src/
 │   ├── __init__.py
-│   ├── cli.py             # CLI with argparse (crawl / gen-config / novel-crawler entry points)
+│   ├── cli.py             # CLI with argparse (crawl / generate / validate / novel-crawler entry points)
 │   ├── config.py          # SiteConfig + python-dotenv + LLM settings
 │   ├── models/
 │   │   └── __init__.py    # ChapterLink, NovelMetadata, ChapterResult, CrawlResult, CrawlProgress

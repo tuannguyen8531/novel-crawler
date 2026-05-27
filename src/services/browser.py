@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from playwright.sync_api import Page, Playwright, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 
 from src.services.http import FetchError, FetchResponse
 
@@ -17,6 +17,8 @@ class BrowserFetcher:
     retry_backoff_seconds: float = 2.0
     _last_request_at: float = field(default=0.0, init=False)
     _pw: Playwright | None = field(default=None, init=False)
+    _browser: Browser | None = field(default=None, init=False)
+    _context: BrowserContext | None = field(default=None, init=False)
     _page: Page | None = field(default=None, init=False)
 
     def __enter__(self) -> BrowserFetcher:
@@ -30,20 +32,30 @@ class BrowserFetcher:
         if self._pw is not None:
             return
         self._pw = sync_playwright().start()
-        browser = self._pw.chromium.launch(
+        self._browser = self._pw.chromium.launch(
             args=["--disable-blink-features=AutomationControlled"]
         )
-        context = browser.new_context(
+        self._context = self._browser.new_context(
             user_agent=self.user_agent,
             viewport={"width": 1920, "height": 1080},
             locale="en-US",
         )
-        context.set_default_timeout(int(self.timeout_seconds * 1000))
-        self._page = context.new_page()
+        self._context.set_default_timeout(int(self.timeout_seconds * 1000))
+        self._page = self._context.new_page()
 
     def close(self) -> None:
-        self._pw = None
-        self._page = None
+        if self._page is not None:
+            self._page.close()
+            self._page = None
+        if self._context is not None:
+            self._context.close()
+            self._context = None
+        if self._browser is not None:
+            self._browser.close()
+            self._browser = None
+        if self._pw is not None:
+            self._pw.stop()
+            self._pw = None
 
     def fetch(self, url: str) -> FetchResponse:
         if self._page is None:

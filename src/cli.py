@@ -5,12 +5,14 @@ import json
 import sys
 from pathlib import Path
 
+from bs4 import BeautifulSoup
+
 from src.config import SiteConfig, config
 from src.models import CrawlProgress
 from src.services.browser import BrowserFetcher
 from src.services.config_generator import ConfigGenerator
 from src.services.crawler import NovelCrawler
-from src.services.http import FetchError
+from src.services.http import FetchError, HttpClient
 from src.services.llm import get_llm
 
 RUNTIME_OUTPUT_ROOT = Path("data")
@@ -27,8 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
     crawl = subparsers.add_parser("crawl", help="Download a novel into text files.")
     _add_crawl_arguments(crawl, target_help="Config path or novel name from configs/{novel}.json.")
 
-    gen = subparsers.add_parser("gen-config", help="Use AI to generate a site config from a TOC URL.")
-    _add_gen_config_arguments(gen)
+    gen = subparsers.add_parser("generate", help="Use AI to generate a site config from a TOC URL.")
+    _add_generate_arguments(gen)
+
+    validate = subparsers.add_parser("validate", help="Test a config's selectors against live HTML.")
+    _add_validate_arguments(validate)
 
     return parser
 
@@ -42,12 +47,21 @@ def build_short_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_gen_config_parser() -> argparse.ArgumentParser:
+def build_generate_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gen-config",
+        prog="generate",
         description="Use AI to generate a site config from a TOC URL.",
     )
-    _add_gen_config_arguments(parser)
+    _add_generate_arguments(parser)
+    return parser
+
+
+def build_validate_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="validate",
+        description="Test a config's selectors against live HTML.",
+    )
+    _add_validate_arguments(parser)
     return parser
 
 
@@ -97,7 +111,7 @@ def _add_crawl_arguments(parser: argparse.ArgumentParser, *, target_help: str) -
     )
 
 
-def _add_gen_config_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_generate_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("url", type=str, help="URL of the novel's table-of-contents page.")
     parser.add_argument("--name", type=str, default=None, help="Config name (default: derived from URL).")
     parser.add_argument(
@@ -113,10 +127,25 @@ def _add_gen_config_arguments(parser: argparse.ArgumentParser) -> None:
         help="Use headless browser to fetch pages.",
     )
     parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Skip the HTML cache and always re-fetch pages.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=CONFIG_DIR,
         help=f"Output directory (default: {CONFIG_DIR}).",
+    )
+
+
+def _add_validate_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("target", type=str, help="Config path or novel name from configs/{novel}.json.")
+    parser.add_argument(
+        "-b",
+        "--browser",
+        action="store_true",
+        help="Use headless browser to fetch pages.",
     )
 
 
@@ -126,8 +155,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "crawl":
         return _crawl(args)
-    if args.command == "gen-config":
-        return _gen_config(args)
+    if args.command == "generate":
+        return _generate(args)
+    if args.command == "validate":
+        return _validate(args)
 
     parser.error(f"Unknown command: {args.command}")
     return 2
@@ -139,10 +170,16 @@ def crawl_main(argv: list[str] | None = None) -> int:
     return _crawl(args)
 
 
-def gen_config_main(argv: list[str] | None = None) -> int:
-    parser = build_gen_config_parser()
+def generate_main(argv: list[str] | None = None) -> int:
+    parser = build_generate_parser()
     args = parser.parse_args(argv)
-    return _gen_config(args)
+    return _generate(args)
+
+
+def validate_main(argv: list[str] | None = None) -> int:
+    parser = build_validate_parser()
+    args = parser.parse_args(argv)
+    return _validate(args)
 
 
 def _crawl(args: argparse.Namespace) -> int:
@@ -264,7 +301,7 @@ def _print_progress(progress: CrawlProgress) -> None:
     )
 
 
-def _gen_config(args: argparse.Namespace) -> int:
+def _generate(args: argparse.Namespace) -> int:
     """Generate a site config using AI."""
     try:
         # Use override provider if --provider was given.
@@ -275,7 +312,8 @@ def _gen_config(args: argparse.Namespace) -> int:
             llm = get_llm()
 
         generator = ConfigGenerator(llm, use_browser=args.browser)
-        config_dict = generator.generate(args.url, name=args.name)
+        cache_dir = None if args.no_cache else Path("data") / ".gen-cache"
+        config_dict = generator.generate(args.url, name=args.name, cache_dir=cache_dir)
 
         # Validate before showing.
         try:
@@ -308,4 +346,117 @@ def _gen_config(args: argparse.Namespace) -> int:
         return 130
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def _validate(args: argparse.Namespace) -> int:
+    """Test a config's selectors against live HTML."""
+    try:
+        config_path = _resolve_config_path(args.target)
+        site_config = SiteConfig.from_file(config_path)
+
+        use_browser = args.browser if args.browser is not None else config.use_browser
+
+        if use_browser:
+            fetcher: BrowserFetcher | HttpClient = BrowserFetcher(
+                user_agent=site_config.user_agent,
+                timeout_seconds=site_config.timeout_seconds,
+                delay_seconds=site_config.request_delay_seconds,
+            )
+            fetcher.__enter__()
+        else:
+            fetcher = HttpClient(
+                user_agent=site_config.user_agent,
+                timeout_seconds=site_config.timeout_seconds,
+                delay_seconds=site_config.request_delay_seconds,
+                respect_robots=False,
+            )
+
+        try:
+            print(f"\n{'═' * 60}")
+            print("Validating config selectors")
+            print(f"{'═' * 60}")
+            print(f"Config: {config_path}")
+            print(f"Start URL: {site_config.start_url}")
+            print(f"Fetcher: {'browser' if use_browser else 'http'}")
+            print()
+
+            # --- TOC validation ---
+            print("📖 TOC Page")
+            print(f"   URL: {site_config.start_url}")
+            toc_html = fetcher.fetch(site_config.start_url).body
+            toc_soup = BeautifulSoup(toc_html, "html.parser")
+
+            for label, selector in [
+                ("novel_title_selector", site_config.novel_title_selector),
+                ("author_selector", site_config.author_selector),
+                ("chapter_link_selector", site_config.chapter_link_selector),
+                ("toc_next_selector", site_config.toc_next_selector),
+            ]:
+                if selector:
+                    matches = len(toc_soup.select(selector))
+                    status = "✅" if matches > 0 else "❌"
+                    print(f"   {status} {label}: '{selector}' → {matches} match(es)")
+                else:
+                    print(f"   ⏭  {label}: null (skipped)")
+
+            # --- Chapter validation ---
+            from src.services.crawler import NovelCrawler
+            crawler = NovelCrawler(site_config)
+            metadata, chapters = crawler.discover_chapters()
+
+            print()
+            print(f"📚 Discovered {len(chapters)} chapters")
+            print(f"   Title: {metadata.title}")
+            if metadata.author:
+                print(f"   Author: {metadata.author}")
+
+            if chapters:
+                first = chapters[0]
+                print()
+                print(f"📄 Sample Chapter")
+                print(f"   URL: {first.url}")
+                ch_html = fetcher.fetch(first.url).body
+                ch_soup = BeautifulSoup(ch_html, "html.parser")
+
+                for label, selector in [
+                    ("chapter_title_selector", site_config.chapter_title_selector),
+                    ("chapter_content_selector", site_config.chapter_content_selector),
+                ]:
+                    if selector:
+                        matches = len(ch_soup.select(selector))
+                        status = "✅" if matches > 0 else "❌"
+                        print(f"   {status} {label}: '{selector}' → {matches} match(es)")
+                    else:
+                        print(f"   ⏭  {label}: null (skipped)")
+
+                if site_config.remove_selectors:
+                    print(f"   remove_selectors:")
+                    for sel in site_config.remove_selectors:
+                        matches = len(ch_soup.select(sel))
+                        status = "✅" if matches > 0 else "⚠️"
+                        print(f"      {status} '{sel}' → {matches} match(es)")
+                else:
+                    print(f"   remove_selectors: [] (none configured)")
+
+                # Test content extraction
+                content_node = ch_soup.select_one(site_config.chapter_content_selector)
+                if content_node:
+                    text_len = len(content_node.get_text(strip=True))
+                    print(f"   Extracted content length: {text_len} chars")
+                    if text_len < 100:
+                        print("   ⚠️  Content very short — check selectors or remove_selectors")
+                else:
+                    print("   ❌ Could not extract content — chapter_content_selector returned 0 matches")
+
+            print(f"\n{'═' * 60}")
+
+        finally:
+            if use_browser:
+                fetcher.__exit__(None, None, None)
+
+        return 0
+
+    except (OSError, ValueError, FetchError) as error:
+        print(f"Error: {error}", file=sys.stderr)
         return 1

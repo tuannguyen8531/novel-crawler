@@ -7,6 +7,7 @@ validated ``SiteConfig`` ready to write to disk.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Generator
@@ -26,6 +27,66 @@ from src.utils.html import clean_html_for_analysis
 class Fetcher(Protocol):
     """Minimal interface shared by HttpClient and BrowserFetcher."""
     def fetch(self, url: str) -> FetchResponse: ...
+
+
+class _HtmlCache:
+    """Simple file-based cache for raw HTML responses.
+
+    Automatically invalidates entries that look like error or challenge pages.
+    """
+
+    def __init__(self, cache_dir: Path) -> None:
+        self._dir = cache_dir
+        self._dir.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _key(url: str) -> str:
+        return hashlib.sha256(url.encode()).hexdigest()[:16] + ".html"
+
+    def get(self, url: str) -> str | None:
+        path = self._dir / self._key(url)
+        if not path.is_file():
+            return None
+        html = path.read_text(encoding="utf-8")
+        if self._is_bad(html):
+            print(f"   ⚠  Cached HTML looks bad — invalidating cache for {url}")
+            self.invalidate(url)
+            return None
+        return html
+
+    def set(self, url: str, html: str) -> None:
+        path = self._dir / self._key(url)
+        path.write_text(html, encoding="utf-8")
+
+    def invalidate(self, url: str) -> None:
+        path = self._dir / self._key(url)
+        if path.exists():
+            path.unlink()
+
+    @staticmethod
+    def _is_bad(html: str) -> bool:
+        """Detect if cached HTML is useless (error, challenge, or empty)."""
+        if not html or len(html.strip()) < 200:
+            return True
+        soup = BeautifulSoup(html, "html.parser")
+        title = (soup.title.string or "").lower() if soup.title else ""
+        body_text = soup.get_text(" ", strip=True)[:300].lower()
+
+        bad_signals = (
+            "just a moment",
+            "checking your browser",
+            "ddos protection",
+            "attention required",
+            "cloudflare",
+            "404",
+            "not found",
+            "error",
+            "access denied",
+            "forbidden",
+        )
+        return any(sig in title for sig in bad_signals) or any(
+            sig in body_text for sig in bad_signals
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -143,37 +204,47 @@ class ConfigGenerator:
 
     # -- public API ---------------------------------------------------------
 
-    def generate(self, toc_url: str, *, name: str | None = None) -> dict[str, Any]:
+    def generate(
+        self,
+        toc_url: str,
+        *,
+        name: str | None = None,
+        configs_dir: Path | None = None,
+        cache_dir: Path | None = None,
+    ) -> dict[str, Any]:
         """Run both phases and return a complete config dict.
 
         Returns the raw dict (not yet a SiteConfig) so the caller can
         review / edit before persisting.
         """
+        configs_dir = configs_dir or Path("configs")
+        cache = _HtmlCache(cache_dir or Path("data") / ".gen-cache")
+        domain = urlparse(toc_url).netloc
+        known = self._load_known_domain_config(domain, configs_dir)
+
         with self._open_fetcher() as fetcher:
             # Phase 1: TOC analysis
-            print(f"\n📖 Fetching TOC page: {toc_url}")
-            toc_response = fetcher.fetch(toc_url)
-            toc_html = toc_response.body
+            toc_html = self._fetch_or_cache(fetcher, cache, toc_url, "TOC")
+            if toc_html is None:
+                raise RuntimeError(f"Failed to fetch TOC page: {toc_url}")
 
             # Detect 404 / error pages and retry with trailing slash.
             if self._is_error_page(toc_html) and not toc_url.endswith("/"):
                 alt_url = toc_url.rstrip("/") + "/"
                 print(f"⚠  Page looks like a 404 — retrying with: {alt_url}")
-                toc_response = fetcher.fetch(alt_url)
-                if not self._is_error_page(toc_response.body):
-                    toc_html = toc_response.body
+                alt_html = self._fetch_or_cache(fetcher, cache, alt_url, "TOC")
+                if alt_html is not None and not self._is_error_page(alt_html):
+                    toc_html = alt_html
                     toc_url = alt_url
                 else:
                     print("⚠  Still a 404 — proceeding with original page.")
 
             toc_soup = BeautifulSoup(toc_html, "html.parser")
             toc_clean = clean_html_for_analysis(toc_html)
-            toc_result = self._ask_llm_with_retry(
-                system=_SYSTEM_TOC,
-                user=f"URL: {toc_url}\n\nHTML:\n{toc_clean}",
-                call_type="gen-config-toc",
-                soup=toc_soup,
-                retry_system=_RETRY_TOC,
+
+            # Try known-domain selectors first; fall back to LLM.
+            toc_result = self._try_known_selectors(
+                known, toc_soup, "toc", toc_clean, _SYSTEM_TOC, _RETRY_TOC
             )
 
             # Discover first chapter URL for Phase 2
@@ -185,16 +256,12 @@ class ConfigGenerator:
             if chapter_url:
                 # Phase 2: Chapter analysis with automatic browser fallback
                 ch_html, ch_soup = self._fetch_chapter_with_fallback(
-                    fetcher, chapter_url
+                    fetcher, chapter_url, cache
                 )
                 if ch_soup is not None:
                     ch_clean = clean_html_for_analysis(ch_html)
-                    chapter_result = self._ask_llm_with_retry(
-                        system=_SYSTEM_CHAPTER,
-                        user=f"URL: {chapter_url}\n\nHTML:\n{ch_clean}",
-                        call_type="gen-config-chapter",
-                        soup=ch_soup,
-                        retry_system=_RETRY_CHAPTER,
+                    chapter_result = self._try_known_selectors(
+                        known, ch_soup, "chapter", ch_clean, _SYSTEM_CHAPTER, _RETRY_CHAPTER
                     )
                 else:
                     print("⚠  Could not fetch chapter content even with browser — skipping Phase 2.")
@@ -205,6 +272,47 @@ class ConfigGenerator:
         site_name = name or self._derive_name(toc_url)
         config_dict = self._build_config(toc_url, site_name, toc_result, chapter_result)
         return config_dict
+
+    def _try_known_selectors(
+        self,
+        known: dict[str, Any] | None,
+        soup: BeautifulSoup,
+        phase: str,
+        clean_html: str,
+        system_prompt: str,
+        retry_prompt: str,
+    ) -> dict[str, Any]:
+        """Use known-domain selectors if they validate, else ask the LLM."""
+        if known:
+            result = (
+                {
+                    "novel_title_selector": known.get("novel_title_selector"),
+                    "author_selector": known.get("author_selector"),
+                    "chapter_link_selector": known.get("chapter_link_selector"),
+                    "toc_next_selector": known.get("toc_next_selector"),
+                }
+                if phase == "toc"
+                else {
+                    "chapter_title_selector": known.get("chapter_title_selector"),
+                    "chapter_content_selector": known.get("chapter_content_selector"),
+                    "remove_selectors": list(known.get("remove_selectors", [])),
+                }
+            )
+            issues = self._validate_selectors(result, soup, f"gen-config-{phase}")
+            if not issues:
+                print(f"✅ Reusing known {phase} selectors for this domain.")
+                return result
+            print(
+                f"⚠  Known {phase} selectors stale ({', '.join(issues)}) — falling back to LLM."
+            )
+
+        return self._ask_llm_with_retry(
+            system=system_prompt,
+            user=f"HTML:\n{clean_html}",
+            call_type=f"gen-config-{phase}",
+            soup=soup,
+            retry_system=retry_prompt,
+        )
 
     @staticmethod
     def validate(config_dict: dict[str, Any]) -> SiteConfig:
@@ -244,12 +352,38 @@ class ConfigGenerator:
                 respect_robots=False,
             )
 
+    def _fetch_or_cache(
+        self,
+        fetcher: Fetcher,
+        cache: _HtmlCache,
+        url: str,
+        label: str,
+    ) -> str | None:
+        """Return cached HTML if present, else fetch and cache."""
+        cached = cache.get(url)
+        if cached is not None:
+            print(f"📦 {label} cache hit: {url}")
+            return cached
+
+        print(f"🌐 {label} cache miss — fetching: {url}")
+        try:
+            response = fetcher.fetch(url)
+            cache.set(url, response.body)
+            return response.body
+        except Exception as e:
+            print(f"⚠  Failed to fetch {url}: {e}")
+            return None
+
     def _fetch_chapter_with_fallback(
-        self, fetcher: Fetcher, chapter_url: str
+        self,
+        fetcher: Fetcher,
+        chapter_url: str,
+        cache: _HtmlCache,
     ) -> tuple[str, BeautifulSoup | None]:
         """Fetch a chapter page; fallback to browser if blocked by anti-bot."""
-        print(f"📄 Fetching sample chapter: {chapter_url}")
-        ch_html = fetcher.fetch(chapter_url).body
+        ch_html = self._fetch_or_cache(fetcher, cache, chapter_url, "Chapter")
+        if ch_html is None:
+            return "", None
         ch_soup = BeautifulSoup(ch_html, "html.parser")
 
         if not self._is_challenge_page(ch_html):
@@ -268,6 +402,7 @@ class ConfigGenerator:
             delay_seconds=1.0,
         ) as browser_fetcher:
             ch_html = browser_fetcher.fetch(chapter_url).body
+            cache.set(chapter_url, ch_html)
             ch_soup = BeautifulSoup(ch_html, "html.parser")
             if self._is_challenge_page(ch_html):
                 print("⚠  Browser also hit a challenge page. Site may require advanced bypass.")
@@ -289,6 +424,23 @@ class ConfigGenerator:
         if any(sig in body_text for sig in ("页面不存在", "页面已删除", "page not found")):
             return True
         return False
+
+    @staticmethod
+    def _load_known_domain_config(
+        domain: str, configs_dir: Path
+    ) -> dict[str, Any] | None:
+        """Scan configs_dir for a config whose start_url netloc matches domain."""
+        if not configs_dir.is_dir():
+            return None
+        for path in sorted(configs_dir.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                start_url = data.get("start_url", "")
+                if urlparse(start_url).netloc == domain:
+                    return data
+            except (OSError, ValueError):
+                continue
+        return None
 
     @staticmethod
     def _is_challenge_page(html: str) -> bool:

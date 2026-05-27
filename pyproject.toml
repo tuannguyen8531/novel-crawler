@@ -14,7 +14,8 @@ dependencies = [
 [project.scripts]
 novel-crawler = "src.cli:main"
 crawl = "src.cli:crawl_main"
-gen-config = "src.cli:gen_config_main"
+generate = "src.cli:generate_main"
+validate = "src.cli:validate_main"
 
 [build-system]
 requires = ["hatchling"]
