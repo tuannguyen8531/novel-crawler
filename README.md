@@ -8,6 +8,7 @@ CLI tool for downloading web novel chapters from public websites using CSS selec
 - **AI config generation**: Use Ollama or Gemini to auto-generate site configs from a TOC URL
 - **Auto-resume**: Skips already-downloaded chapters, continues from where it left off
 - **Browser mode**: Playwright headless browser for sites with JavaScript challenges (Cloudflare)
+- **Concurrent browser pages**: One Chromium session with isolated pages for parallel chapter downloads
 - **robots.txt respect**: Checks site crawl rules by default
 - **Atomic writes**: Crash-safe file output via temp file + rename
 - **Incremental manifest**: Real-time progress tracking in `manifest.json`
@@ -16,7 +17,7 @@ CLI tool for downloading web novel chapters from public websites using CSS selec
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- [Playwright](https://playwright.dev) (for `--browser` mode) — Chromium installed automatically
+- [Playwright](https://playwright.dev) (for `--browser` mode), with Playwright Chromium or a system Chrome/Chromium browser
 
 ## Setup
 
@@ -136,8 +137,11 @@ uv run crawl my-site
 # Browser mode (Playwright, for Cloudflare/JS challenges)
 uv run crawl my-site --browser
 
+# Browser mode with 3 concurrent pages in one Chromium session
+uv run crawl my-site --browser --workers 3
+
 # Download next 20 new chapters (skips don't count)
-uv run crawl my-site --browser --max 20
+uv run crawl my-site --browser --workers 3 --max 20
 
 # Re-download all chapters
 uv run crawl my-site --browser --overwrite
@@ -150,6 +154,7 @@ uv run crawl my-site --browser --overwrite
 | `target` | Config path or novel name (matches `configs/{novel}.json`) |
 | `-b, --browser` | Use headless browser (Playwright) for sites with JS challenges. Default: `USE_BROWSER` env |
 | `-m, --max N` | Stop after fetching N new chapters (skipped chapters don't count). Default: `MAX_CHAPTERS` env |
+| `-w, --workers N` | Concurrent chapter downloads. Default: 3 in browser mode, otherwise 1. Browser workers share one Chromium context |
 | `--share-output PATH` | Override shared chapter output directory |
 | `--overwrite` | Re-download chapters even if files already exist |
 | `--fail-fast` | Stop on the first chapter error |
@@ -247,7 +252,7 @@ fetch → parse → extract → clean → write → track
 | `services/crawler.py` | NovelCrawler: chapter discovery, crawl loop, manifest tracking |
 | `services/config_generator.py` | AI-assisted site config generation (2-phase: TOC + chapter) |
 | `services/http.py` | HttpClient: stdlib urllib, cookies, robots.txt, retry, encoding detection |
-| `services/browser.py` | BrowserFetcher: Playwright Chromium for JS-challenge sites |
+| `services/browser.py` | BrowserFetcher: async Playwright pool with one shared Chromium context; falls back to system Chrome when the bundled browser is unavailable |
 | `services/llm/` | LLM providers: Ollama, Gemini with retry, logging, spinner |
 | `utils/text.py` | Text utilities: slugify, normalize, HTML-to-text conversion |
 | `utils/html.py` | HTML cleaning for LLM analysis: strip noise, keep structure |

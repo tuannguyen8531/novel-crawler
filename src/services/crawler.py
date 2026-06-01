@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypedDict
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
@@ -26,6 +27,12 @@ ProgressCallback = Callable[[CrawlProgress], None]
 
 class Fetcher(Protocol):
     def fetch(self, url: str) -> FetchResponse: ...
+
+
+class CrawlError(TypedDict):
+    index: int
+    url: str
+    error: str
 
 
 class NovelCrawler:
@@ -105,6 +112,7 @@ class NovelCrawler:
         overwrite: bool = False,
         share_root: Path | None,
         progress_callback: ProgressCallback | None = None,
+        workers: int = 1,
     ) -> CrawlResult:
         metadata, chapter_links = self.discover_chapters()
         if not chapter_links:
@@ -120,7 +128,7 @@ class NovelCrawler:
         chapter_output_dir.mkdir(parents=True, exist_ok=True)
 
         results: list[ChapterResult] = []
-        errors: list[dict[str, object]] = []
+        errors: list[CrawlError] = []
         generated_at = datetime.now(UTC).isoformat()
         fetched_count = 0
 
@@ -138,12 +146,62 @@ class NovelCrawler:
             errors=errors,
         )
 
-        for index, chapter_link in enumerate(chapter_links, start=1):
-            if max_chapters is not None and fetched_count >= max_chapters:
-                break
-            filename = f"chapter_{index}.txt"
-            chapter_path = chapter_output_dir / filename
-            try:
+        def _write_running_manifest(*, status: str = "running") -> None:
+            self._write_manifest(
+                novel_dir / "manifest.json",
+                generated_at=generated_at,
+                status=status,
+                metadata=metadata,
+                runtime_output_dir=novel_dir,
+                chapter_output_dir=chapter_output_dir,
+                chapter_links=chapter_links,
+                results=results,
+                errors=errors,
+            )
+
+        def _fetch_chapter(
+            index: int, chapter_link: ChapterLink, chapter_path: Path
+        ) -> ChapterResult:
+            self._report_progress(
+                progress_callback,
+                current=index,
+                total=len(chapter_links),
+                status="started",
+                title=chapter_link.title,
+                source_url=chapter_link.url,
+                path=str(chapter_path),
+            )
+            title, body, final_url = self._fetch_chapter(chapter_link)
+            self._write_text_atomic(chapter_path, self._chapter_text(title, body))
+            return ChapterResult(
+                index=index,
+                title=title,
+                source_url=final_url,
+                path=str(chapter_path),
+            )
+
+        if workers < 1:
+            raise ValueError("Number of workers must be at least 1.")
+
+        # A strict fail-fast crawl cannot start speculative requests because an
+        # in-flight HTTP request cannot be cancelled reliably.
+        effective_workers = 1 if fail_fast else workers
+        next_chapter = 0
+        pending: dict[Future[ChapterResult], tuple[int, ChapterLink]] = {}
+
+        def _fill_pending(executor: ThreadPoolExecutor) -> None:
+            nonlocal next_chapter
+            while next_chapter < len(chapter_links):
+                if len(pending) >= effective_workers:
+                    return
+                if max_chapters is not None and fetched_count + len(pending) >= max_chapters:
+                    return
+
+                index = next_chapter + 1
+                chapter_link = chapter_links[next_chapter]
+                next_chapter += 1
+                chapter_path = chapter_output_dir / f"chapter_{index}.txt"
+
                 if not overwrite and self._is_existing_chapter(chapter_path):
                     results.append(
                         ChapterResult(
@@ -163,63 +221,60 @@ class NovelCrawler:
                         source_url=chapter_link.url,
                         path=str(chapter_path),
                     )
+                    _write_running_manifest()
                     continue
 
-                self._report_progress(
-                    progress_callback,
-                    current=index,
-                    total=len(chapter_links),
-                    status="started",
-                    title=chapter_link.title,
-                    source_url=chapter_link.url,
-                    path=str(chapter_path),
-                )
-                title, body, final_url = self._fetch_chapter(chapter_link)
-                self._write_text_atomic(chapter_path, self._chapter_text(title, body))
-                results.append(
-                    ChapterResult(
-                        index=index,
-                        title=title,
-                        source_url=final_url,
-                        path=str(chapter_path),
-                    )
-                )
-                fetched_count += 1
-                self._report_progress(
-                    progress_callback,
-                    current=index,
-                    total=len(chapter_links),
-                    status="fetched",
-                    title=title,
-                    source_url=final_url,
-                    path=str(chapter_path),
-                )
-            except Exception as error:
-                error_text = str(error)
-                errors.append({"index": index, "url": chapter_link.url, "error": error_text})
-                self._report_progress(
-                    progress_callback,
-                    current=index,
-                    total=len(chapter_links),
-                    status="failed",
-                    title=chapter_link.title,
-                    source_url=chapter_link.url,
-                    error=error_text,
-                )
-                if fail_fast:
-                    raise
+                future = executor.submit(_fetch_chapter, index, chapter_link, chapter_path)
+                pending[future] = (index, chapter_link)
 
-            self._write_manifest(
-                novel_dir / "manifest.json",
-                generated_at=generated_at,
-                status="running",
-                metadata=metadata,
-                runtime_output_dir=novel_dir,
-                chapter_output_dir=chapter_output_dir,
-                chapter_links=chapter_links,
-                results=results,
-                errors=errors,
-            )
+        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+            _fill_pending(executor)
+            while pending:
+                completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in completed:
+                    index, chapter_link = pending.pop(future)
+                    try:
+                        result = future.result()
+                    except Exception as error:
+                        error_text = str(error)
+                        errors.append(
+                            {
+                                "index": index,
+                                "url": chapter_link.url,
+                                "error": error_text,
+                            }
+                        )
+                        self._report_progress(
+                            progress_callback,
+                            current=index,
+                            total=len(chapter_links),
+                            status="failed",
+                            title=chapter_link.title,
+                            source_url=chapter_link.url,
+                            error=error_text,
+                        )
+                        _write_running_manifest(status="failed" if fail_fast else "running")
+                        if fail_fast:
+                            raise
+                    else:
+                        results.append(result)
+                        fetched_count += 1
+                        self._report_progress(
+                            progress_callback,
+                            current=index,
+                            total=len(chapter_links),
+                            status="fetched",
+                            title=result.title,
+                            source_url=result.source_url,
+                            path=result.path,
+                        )
+                        _write_running_manifest()
+                _fill_pending(executor)
+
+        # Sort results by index so output is deterministic regardless of
+        # parallel execution order.
+        results.sort(key=lambda r: r.index)
+        errors.sort(key=lambda error: error["index"])
 
         self._write_manifest(
             novel_dir / "manifest.json",
@@ -314,7 +369,7 @@ class NovelCrawler:
         chapter_output_dir: Path,
         chapter_links: list[ChapterLink],
         results: list[ChapterResult],
-        errors: list[dict[str, object]],
+        errors: list[CrawlError],
     ) -> None:
         skipped_count = sum(1 for result in results if result.skipped)
         manifest = {
