@@ -137,11 +137,11 @@ uv run crawl my-site
 # Browser mode (Playwright, for Cloudflare/JS challenges)
 uv run crawl my-site --browser
 
-# Browser mode with 3 concurrent pages in one Chromium session
+# Opt in to 3 concurrent browser pages in one Chromium session
 uv run crawl my-site --browser --workers 3
 
 # Download next 20 new chapters (skips don't count)
-uv run crawl my-site --browser --workers 3 --max 20
+uv run crawl my-site --browser --max 20
 
 # Re-download all chapters
 uv run crawl my-site --browser --overwrite
@@ -154,7 +154,7 @@ uv run crawl my-site --browser --overwrite
 | `target` | Config path or novel name (matches `configs/{novel}.json`) |
 | `-b, --browser` | Use headless browser (Playwright) for sites with JS challenges. Default: `USE_BROWSER` env |
 | `-m, --max N` | Stop after fetching N new chapters (skipped chapters don't count). Default: `MAX_CHAPTERS` env |
-| `-w, --workers N` | Concurrent chapter downloads. Default: 3 in browser mode, otherwise 1. Browser workers share one Chromium context |
+| `-w, --workers N` | Concurrent chapter downloads. Default: 1. Browser workers share one Chromium context |
 | `--share-output PATH` | Override shared chapter output directory |
 | `--overwrite` | Re-download chapters even if files already exist |
 | `--fail-fast` | Stop on the first chapter error |

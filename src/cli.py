@@ -130,7 +130,7 @@ def _add_crawl_arguments(parser: argparse.ArgumentParser, *, target_help: str) -
         "--workers",
         type=int,
         default=None,
-        help="Concurrent chapter downloads. Default: 3 with --browser, otherwise 1.",
+        help="Concurrent chapter downloads. Default: 1.",
     )
 
 
@@ -238,7 +238,7 @@ def _crawl(args: argparse.Namespace) -> int:
 
         use_browser = args.browser if args.browser is not None else config.use_browser
         if args.workers is None:
-            args.workers = 3 if use_browser else 1
+            args.workers = 1
         if args.workers < 1:
             raise ValueError("Number of workers must be at least 1.")
 

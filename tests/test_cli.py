@@ -79,7 +79,7 @@ class CliTest(unittest.TestCase):
 
     @unittest.mock.patch("src.cli.BrowserFetcher")
     @unittest.mock.patch("src.cli._crawl_with_fetcher")
-    def test_crawl_browser_defaults_to_three_workers(
+    def test_crawl_defaults_to_one_worker(
         self, mock_crawl_with_fetcher, mock_browser_fetcher
     ) -> None:
         import argparse
@@ -93,14 +93,14 @@ class CliTest(unittest.TestCase):
             share_output=None,
         )
         _crawl(args)
-        self.assertEqual(args.workers, 3)
+        self.assertEqual(args.workers, 1)
         mock_browser_fetcher.assert_called_once_with(
             user_agent=unittest.mock.ANY,
             timeout_seconds=unittest.mock.ANY,
             delay_seconds=unittest.mock.ANY,
             retry_attempts=unittest.mock.ANY,
             retry_backoff_seconds=unittest.mock.ANY,
-            max_concurrency=3,
+            max_concurrency=1,
         )
 
     def test_logging_stderr_and_quiet_mode(self) -> None:
