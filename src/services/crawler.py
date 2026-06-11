@@ -132,7 +132,7 @@ class NovelCrawler:
         generated_at = datetime.now(UTC).isoformat()
         fetched_count = 0
 
-        self._write_json(novel_dir / "metadata.json", asdict(metadata))
+        self._write_metadata(novel_dir / "metadata.json", metadata)
         self._write_json(novel_dir / "config.json", asdict(self.config))
         self._write_manifest(
             novel_dir / "manifest.json",
@@ -287,6 +287,8 @@ class NovelCrawler:
             results=results,
             errors=errors,
         )
+        if share_root:
+            self._write_metadata(chapter_output_dir.parent / "metadata.json", metadata)
 
         return CrawlResult(
             metadata=metadata,
@@ -377,7 +379,7 @@ class NovelCrawler:
             "updated_at": datetime.now(UTC).isoformat(),
             "status": status,
             "config": asdict(self.config),
-            "metadata": asdict(metadata),
+            "metadata": self._metadata_dict(metadata),
             "runtime_output_dir": str(runtime_output_dir),
             "chapter_output_dir": str(chapter_output_dir),
             "total_chapters": len(chapter_links),
@@ -393,6 +395,20 @@ class NovelCrawler:
             "errors": errors,
         }
         self._write_json(path, manifest)
+
+    @staticmethod
+    def _metadata_dict(metadata: NovelMetadata) -> dict[str, object]:
+        return {
+            "title": metadata.title,
+            "translated": metadata.translated,
+            "author": metadata.author,
+            "source_url": metadata.source_url,
+            "illustration_url": metadata.illustration_url,
+            "site_name": metadata.site_name,
+        }
+
+    def _write_metadata(self, path: Path, metadata: NovelMetadata) -> None:
+        self._write_json(path, self._metadata_dict(metadata))
 
     @staticmethod
     def _chapter_text(title: str, body: str) -> str:

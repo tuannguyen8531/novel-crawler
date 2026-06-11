@@ -133,10 +133,28 @@ class NovelCrawlerTest(unittest.TestCase):
             chapter_one = (chapter_dir / "chapter_1.txt").read_text(
                 encoding="utf-8"
             )
+            runtime_metadata = json.loads(
+                (novel_dir / "metadata.json").read_text(encoding="utf-8")
+            )
+            shared_metadata = json.loads(
+                (chapter_dir.parent / "metadata.json").read_text(encoding="utf-8")
+            )
             config_snapshot_exists = config_snapshot.is_file()
 
         self.assertEqual(result.metadata.title, "Demo Novel")
         self.assertEqual(result.metadata.author, "Demo Author")
+        self.assertEqual(
+            runtime_metadata,
+            {
+                "title": "Demo Novel",
+                "translated": {"en": None, "vi": None},
+                "author": "Demo Author",
+                "source_url": "https://public.example/novel",
+                "illustration_url": None,
+                "site_name": "demo",
+            },
+        )
+        self.assertEqual(shared_metadata, runtime_metadata)
         self.assertEqual(len(result.chapters), 2)
         self.assertTrue(result.chapters[0].path.endswith("demo-novel/input/chapter_1.txt"))
         self.assertFalse(result.chapters[0].skipped)

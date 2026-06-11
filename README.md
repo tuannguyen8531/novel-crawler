@@ -185,7 +185,7 @@ uv run crawl my-site --browser --overwrite
 2. Fetches the table of contents page, extracts chapter links via CSS selector
 3. Paginates through TOC if `toc_next_selector` is set (up to `max_toc_pages`)
 4. For each chapter: fetches page, extracts content via selector, strips noise elements
-5. Writes `chapter_N.txt` to shared output directory (atomic write)
+5. Writes `chapter_N.txt` to shared input directory (atomic write)
 6. Updates `manifest.json` after each chapter
 7. On resume: skips chapters where `chapter_N.txt` exists and is non-empty
 8. `--max` counts only newly fetched chapters, not skipped ones
@@ -194,15 +194,16 @@ uv run crawl my-site --browser --overwrite
 
 Each crawl produces two output groups:
 
-- `../share/{novel}/`: Chapter text files for translator input
+- `../share/{novel}/`: Translator input files and crawl metadata
 - `output/{novel}/`: Crawler runtime state
 
 In `../share/{novel}/`:
-- `chapter_1.txt`, `chapter_2.txt`, ...: Individual chapter files
+- `input/chapter_1.txt`, `input/chapter_2.txt`, ...: Individual chapter files
+- `metadata.json`: Novel title, translation placeholders, author, source URL, illustration URL, site name
 
 In `output/{novel}/`:
 - `config.json`: Snapshot of the config used for this crawl
-- `metadata.json`: Novel title, author, source URL
+- `metadata.json`: Novel title, translation placeholders, author, source URL, illustration URL, site name
 - `manifest.json`: Progress, discovered chapters, results, errors
 
 ### Console output

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -15,6 +15,10 @@ class NovelMetadata:
     author: str | None
     source_url: str
     site_name: str
+    translated: dict[str, str | None] = field(
+        default_factory=lambda: {"en": None, "vi": None}
+    )
+    illustration_url: str | None = None
 
 
 @dataclass(frozen=True)
