@@ -22,6 +22,7 @@ from src.config import DEFAULT_USER_AGENT, SiteConfig
 from src.services.http import FetchResponse, HttpClient
 from src.services.llm.base import BaseProvider
 from src.utils.html import clean_html_for_analysis
+from src.utils.logging import get_logger
 
 
 class Fetcher(Protocol):
@@ -237,7 +238,7 @@ class ConfigGenerator:
                     toc_html = alt_html
                     toc_url = alt_url
                 else:
-                    print("⚠  Still a 404 — proceeding with original page.")
+                    get_logger().warning("Still a 404 — proceeding with original page.")
 
             toc_soup = BeautifulSoup(toc_html, "html.parser")
             toc_clean = clean_html_for_analysis(toc_html)
@@ -264,9 +265,11 @@ class ConfigGenerator:
                         known, ch_soup, "chapter", ch_clean, _SYSTEM_CHAPTER, _RETRY_CHAPTER
                     )
                 else:
-                    print("⚠  Could not fetch chapter content even with browser — skipping Phase 2.")
+                    get_logger().warning(
+                        "Could not fetch chapter content even with browser — skipping Phase 2."
+                    )
             else:
-                print("⚠  Could not find a chapter link — skipping Phase 2.")
+                get_logger().warning("Could not find a chapter link — skipping Phase 2.")
 
         # Merge results
         site_name = name or self._derive_name(toc_url)
@@ -371,7 +374,7 @@ class ConfigGenerator:
             cache.set(url, response.body)
             return response.body
         except Exception as e:
-            print(f"⚠  Failed to fetch {url}: {e}")
+            get_logger().warning("Failed to fetch %s: %s", url, e)
             return None
 
     def _fetch_chapter_with_fallback(
@@ -389,9 +392,13 @@ class ConfigGenerator:
         if not self._is_challenge_page(ch_html):
             return ch_html, ch_soup
 
-        print("⚠  Chapter page looks like an anti-bot challenge — trying browser fallback...")
+        get_logger().warning(
+            "Chapter page looks like an anti-bot challenge — trying browser fallback..."
+        )
         if self._use_browser:
-            print("⚠  Already using browser, but still got a challenge page. Proceeding anyway.")
+            get_logger().warning(
+                "Already using browser, but still got a challenge page. Proceeding anyway."
+            )
             return ch_html, ch_soup
 
         from src.services.browser import BrowserFetcher
@@ -405,9 +412,11 @@ class ConfigGenerator:
             cache.set(chapter_url, ch_html)
             ch_soup = BeautifulSoup(ch_html, "html.parser")
             if self._is_challenge_page(ch_html):
-                print("⚠  Browser also hit a challenge page. Site may require advanced bypass.")
+                get_logger().warning(
+                    "Browser also hit a challenge page. Site may require advanced bypass."
+                )
                 return ch_html, None
-            print("✅ Browser fetch succeeded.")
+            get_logger().info("Browser fetch succeeded.")
             return ch_html, ch_soup
 
     @staticmethod
@@ -623,6 +632,7 @@ class ConfigGenerator:
         return {
             "name": name,
             "start_url": toc_url,
+            "version": 1,
             "novel_title_selector": _or(toc.get("novel_title_selector"), None),
             "author_selector": _or(toc.get("author_selector"), None),
             "chapter_link_selector": _or(toc.get("chapter_link_selector"), "a"),

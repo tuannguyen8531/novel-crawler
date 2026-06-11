@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from bs4 import BeautifulSoup
 
@@ -14,15 +15,27 @@ from src.services.config_generator import ConfigGenerator
 from src.services.crawler import NovelCrawler
 from src.services.http import FetchError, HttpClient
 from src.services.llm import get_llm
+from src.utils.logging import get_logger, setup_logging
 
 RUNTIME_OUTPUT_ROOT = Path("data")
 CONFIG_DIR = Path("configs")
+_quiet_output = False
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="novel-crawler",
         description="Download chapters from public novel websites using a per-site JSON config.",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable debug logging.",
+    )
+    parser.add_argument(
+        "-q", "--quiet",
+        action="store_true",
+        help="Suppress crawler progress and non-error logs.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -32,7 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
     gen = subparsers.add_parser("generate", help="Use AI to generate a site config from a TOC URL.")
     _add_generate_arguments(gen)
 
-    validate = subparsers.add_parser("validate", help="Test a config's selectors against live HTML.")
+    validate = subparsers.add_parser(
+        "validate",
+        help="Test a config's selectors against live HTML.",
+    )
     _add_validate_arguments(validate)
 
     return parser
@@ -109,11 +125,23 @@ def _add_crawl_arguments(parser: argparse.ArgumentParser, *, target_help: str) -
         default=None,
         help="Use headless browser for JS challenges. Default: USE_BROWSER env.",
     )
+    parser.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=None,
+        help="Concurrent chapter downloads. Default: 1.",
+    )
 
 
 def _add_generate_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("url", type=str, help="URL of the novel's table-of-contents page.")
-    parser.add_argument("--name", type=str, default=None, help="Config name (default: derived from URL).")
+    parser.add_argument(
+        "--name",
+        type=str,
+        default=None,
+        help="Config name (default: derived from URL).",
+    )
     parser.add_argument(
         "--provider",
         type=str,
@@ -140,7 +168,11 @@ def _add_generate_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_validate_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("target", type=str, help="Config path or novel name from configs/{novel}.json.")
+    parser.add_argument(
+        "target",
+        type=str,
+        help="Config path or novel name from configs/{novel}.json.",
+    )
     parser.add_argument(
         "-b",
         "--browser",
@@ -152,6 +184,8 @@ def _add_validate_arguments(parser: argparse.ArgumentParser) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    _setup_cli_logging(verbose=args.verbose, quiet=args.quiet)
 
     if args.command == "crawl":
         return _crawl(args)
@@ -167,19 +201,34 @@ def main(argv: list[str] | None = None) -> int:
 def crawl_main(argv: list[str] | None = None) -> int:
     parser = build_short_parser()
     args = parser.parse_args(argv)
+    _setup_cli_logging()
     return _crawl(args)
 
 
 def generate_main(argv: list[str] | None = None) -> int:
     parser = build_generate_parser()
     args = parser.parse_args(argv)
+    _setup_cli_logging()
     return _generate(args)
 
 
 def validate_main(argv: list[str] | None = None) -> int:
     parser = build_validate_parser()
     args = parser.parse_args(argv)
+    _setup_cli_logging()
     return _validate(args)
+
+
+def _setup_cli_logging(*, verbose: bool = False, quiet: bool = False) -> None:
+    global _quiet_output
+    _quiet_output = quiet
+    log_level = "debug" if verbose else ("error" if quiet else "info")
+    setup_logging(log_level)
+
+
+def _print_output(*args: object, **kwargs: Any) -> None:
+    if not _quiet_output:
+        print(*args, **kwargs)
 
 
 def _crawl(args: argparse.Namespace) -> int:
@@ -188,6 +237,11 @@ def _crawl(args: argparse.Namespace) -> int:
         site_config = SiteConfig.from_file(config_path)
 
         use_browser = args.browser if args.browser is not None else config.use_browser
+        if args.workers is None:
+            args.workers = 1
+        if args.workers < 1:
+            raise ValueError("Number of workers must be at least 1.")
+
         max_chapters = args.max_chapters if args.max_chapters is not None else None
         if max_chapters is None and config.max_chapters > 0:
             max_chapters = config.max_chapters
@@ -201,13 +255,14 @@ def _crawl(args: argparse.Namespace) -> int:
                 delay_seconds=site_config.request_delay_seconds,
                 retry_attempts=site_config.retry_attempts,
                 retry_backoff_seconds=site_config.retry_backoff_seconds,
+                max_concurrency=args.workers,
             ) as fetcher:
                 return _crawl_with_fetcher(site_config, fetcher, args, max_chapters, share_root)
         else:
             crawler = NovelCrawler(site_config, respect_robots=not args.ignore_robots)
             return _run_crawl(crawler, args, max_chapters, share_root)
     except (OSError, ValueError, FetchError) as error:
-        print(f"Error: {error}", file=sys.stderr)
+        get_logger().error("Error: %s", error)
         return 1
 
 
@@ -232,14 +287,14 @@ def _run_crawl(
             metadata, chapters = crawler.discover_chapters()
             if max_chapters is not None:
                 chapters = chapters[:max_chapters]
-            print(f"Title: {metadata.title}")
+            _print_output(f"Title: {metadata.title}")
             if metadata.author:
-                print(f"Author: {metadata.author}")
-            print(f"Chapters found: {len(chapters)}")
+                _print_output(f"Author: {metadata.author}")
+            _print_output(f"Chapters found: {len(chapters)}")
             for index, chapter in enumerate(chapters[:10], start=1):
-                print(f"{index:04d}. {chapter.title} - {chapter.url}")
+                _print_output(f"{index:04d}. {chapter.title} - {chapter.url}")
             if len(chapters) > 10:
-                print(f"... {len(chapters) - 10} more")
+                _print_output(f"... {len(chapters) - 10} more")
             return 0
 
         result = crawler.crawl(
@@ -249,14 +304,15 @@ def _run_crawl(
             overwrite=args.overwrite,
             share_root=share_root,
             progress_callback=_print_progress,
+            workers=args.workers,
         )
     except (OSError, ValueError, FetchError) as error:
-        print(f"Error: {error}", file=sys.stderr)
+        get_logger().error("Error: %s", error)
         return 1
 
     skipped = sum(1 for ch in result.chapters if ch.skipped)
     fetched = len(result.chapters) - skipped
-    print(f"Done: {result.metadata.title} ({fetched} new, {skipped} skipped)")
+    _print_output(f"Done: {result.metadata.title} ({fetched} new, {skipped} skipped)")
     return 0
 
 
@@ -284,7 +340,7 @@ def _print_progress(progress: CrawlProgress) -> None:
     if progress.status in ("started", "skipped"):
         return
     if progress.status == "fetched":
-        print(f"[{progress.current}/{progress.total}] {progress.title}", flush=True)
+        _print_output(f"[{progress.current}/{progress.total}] {progress.title}", flush=True)
         return
     if progress.status == "failed":
         detail = progress.error or "unknown error"
@@ -295,7 +351,7 @@ def _print_progress(progress: CrawlProgress) -> None:
         )
         return
 
-    print(
+    _print_output(
         f"[{progress.current}/{progress.total}] {progress.title} ({progress.status})",
         flush=True,
     )
@@ -319,7 +375,7 @@ def _generate(args: argparse.Namespace) -> int:
         try:
             ConfigGenerator.validate(config_dict)
         except ValueError as e:
-            print(f"\n⚠  Validation warning: {e}", file=sys.stderr)
+            get_logger().warning("Validation warning: %s", e)
 
         # Show result for review.
         print(f"\n{'═' * 60}")
@@ -345,7 +401,7 @@ def _generate(args: argparse.Namespace) -> int:
         print("\nCancelled.")
         return 130
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        get_logger().error("Error: %s", e)
         return 1
 
 
@@ -358,12 +414,13 @@ def _validate(args: argparse.Namespace) -> int:
         use_browser = args.browser if args.browser is not None else config.use_browser
 
         if use_browser:
-            fetcher: BrowserFetcher | HttpClient = BrowserFetcher(
+            browser_fetcher = BrowserFetcher(
                 user_agent=site_config.user_agent,
                 timeout_seconds=site_config.timeout_seconds,
                 delay_seconds=site_config.request_delay_seconds,
             )
-            fetcher.__enter__()
+            browser_fetcher.__enter__()
+            fetcher: BrowserFetcher | HttpClient = browser_fetcher
         else:
             fetcher = HttpClient(
                 user_agent=site_config.user_agent,
@@ -402,7 +459,7 @@ def _validate(args: argparse.Namespace) -> int:
 
             # --- Chapter validation ---
             from src.services.crawler import NovelCrawler
-            crawler = NovelCrawler(site_config)
+            crawler = NovelCrawler(site_config, fetcher=fetcher)
             metadata, chapters = crawler.discover_chapters()
 
             print()
@@ -414,7 +471,7 @@ def _validate(args: argparse.Namespace) -> int:
             if chapters:
                 first = chapters[0]
                 print()
-                print(f"📄 Sample Chapter")
+                print("📄 Sample Chapter")
                 print(f"   URL: {first.url}")
                 ch_html = fetcher.fetch(first.url).body
                 ch_soup = BeautifulSoup(ch_html, "html.parser")
@@ -431,13 +488,13 @@ def _validate(args: argparse.Namespace) -> int:
                         print(f"   ⏭  {label}: null (skipped)")
 
                 if site_config.remove_selectors:
-                    print(f"   remove_selectors:")
+                    print("   remove_selectors:")
                     for sel in site_config.remove_selectors:
                         matches = len(ch_soup.select(sel))
                         status = "✅" if matches > 0 else "⚠️"
                         print(f"      {status} '{sel}' → {matches} match(es)")
                 else:
-                    print(f"   remove_selectors: [] (none configured)")
+                    print("   remove_selectors: [] (none configured)")
 
                 # Test content extraction
                 content_node = ch_soup.select_one(site_config.chapter_content_selector)
@@ -447,16 +504,19 @@ def _validate(args: argparse.Namespace) -> int:
                     if text_len < 100:
                         print("   ⚠️  Content very short — check selectors or remove_selectors")
                 else:
-                    print("   ❌ Could not extract content — chapter_content_selector returned 0 matches")
+                    print(
+                        "   ❌ Could not extract content — "
+                        "chapter_content_selector returned 0 matches"
+                    )
 
             print(f"\n{'═' * 60}")
 
         finally:
-            if use_browser:
+            if use_browser and isinstance(fetcher, BrowserFetcher):
                 fetcher.__exit__(None, None, None)
 
         return 0
 
     except (OSError, ValueError, FetchError) as error:
-        print(f"Error: {error}", file=sys.stderr)
+        get_logger().error("Error: %s", error)
         return 1

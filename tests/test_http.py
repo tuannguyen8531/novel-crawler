@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import URLError
@@ -38,6 +39,22 @@ class HttpClientTest(unittest.TestCase):
 
         self.assertEqual(result.body, "<html><body>ok</body></html>")
         self.assertEqual(opener.open.call_count, 2)
+
+    def test_worker_thread_inherits_referer(self) -> None:
+        client = HttpClient(user_agent="agent", respect_robots=False)
+        client._last_url = "https://example.com/toc"
+        built_referer: str | None = None
+
+        def worker() -> None:
+            nonlocal built_referer
+            request = client._build_request("https://example.com/c1")
+            built_referer = request.get_header("Referer")
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join()
+
+        self.assertEqual(built_referer, "https://example.com/toc")
 
 
 if __name__ == "__main__":

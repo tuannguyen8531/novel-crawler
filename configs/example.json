@@ -19,5 +19,6 @@
   "request_delay_seconds": 1.5,
   "timeout_seconds": 30,
   "max_toc_pages": 50,
-  "user_agent": "novel-crawler/0.1"
+  "user_agent": "novel-crawler/0.1",
+  "version": 1
 }

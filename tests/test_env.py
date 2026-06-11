@@ -54,6 +54,27 @@ class SiteConfigTest(unittest.TestCase):
         })
         self.assertEqual(config.remove_selectors, ("script",))
 
+    def test_config_migration_validation(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            SiteConfig.from_dict({
+                "name": "demo",
+                "start_url": "url",
+                "chapter_link_selector": "a",
+                "chapter_content_selector": "div",
+                "version": "invalid",
+            })
+        self.assertIn("Invalid config version", str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx:
+            SiteConfig.from_dict({
+                "name": "demo",
+                "start_url": "url",
+                "chapter_link_selector": "a",
+                "chapter_content_selector": "div",
+                "version": 999,
+            })
+        self.assertIn("Unsupported future config version", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

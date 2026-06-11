@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import re
 
-from bs4 import BeautifulSoup, Comment, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, Tag
+from bs4.element import NavigableString
 
 # Attributes worth keeping for selector analysis.
 _KEEP_ATTRS = {"id", "class", "href", "role", "type", "name"}

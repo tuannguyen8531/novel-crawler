@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import ssl
+import threading
 import time
 from dataclasses import dataclass, field
 from email.message import Message
@@ -53,7 +54,26 @@ class HttpClient:
     _last_request_at: float = field(default=0.0, init=False)
     _robots: dict[str, robotparser.RobotFileParser] = field(default_factory=dict, init=False)
     _cookie_jar: CookieJar = field(default_factory=CookieJar, init=False)
-    _last_url: str | None = field(default=None, init=False)
+    _throttle_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _robots_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _cookie_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _local: threading.local = field(default_factory=threading.local, init=False)
+    _shared_last_url: str | None = field(default=None, init=False)
+    _last_url_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+
+    @property
+    def _last_url(self) -> str | None:
+        val = getattr(self._local, "last_url", None)
+        if val is not None:
+            return val
+        with self._last_url_lock:
+            return self._shared_last_url
+
+    @_last_url.setter
+    def _last_url(self, value: str | None) -> None:
+        self._local.last_url = value
+        with self._last_url_lock:
+            self._shared_last_url = value
 
     def fetch(self, url: str) -> FetchResponse:
         if self.respect_robots and not self.can_fetch(url):
@@ -115,13 +135,15 @@ class HttpClient:
 
     def _open(self, request: Request):
         opener = build_opener(HTTPCookieProcessor(self._cookie_jar))
-        return opener.open(request, timeout=self.timeout_seconds)
+        with self._cookie_lock:
+            return opener.open(request, timeout=self.timeout_seconds)
 
     def _robots_parser(self, url: str) -> robotparser.RobotFileParser:
         parsed = urlparse(url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
-        if origin in self._robots:
-            return self._robots[origin]
+        with self._robots_lock:
+            if origin in self._robots:
+                return self._robots[origin]
 
         robots_url = urljoin(origin, "/robots.txt")
         parser = robotparser.RobotFileParser(robots_url)
@@ -133,15 +155,18 @@ class HttpClient:
             parser.parse(body.splitlines())
         except Exception:
             parser.parse([])
-        self._robots[origin] = parser
+
+        with self._robots_lock:
+            self._robots[origin] = parser
         return parser
 
     def _throttle(self) -> None:
-        elapsed = time.monotonic() - self._last_request_at
-        remaining = self.delay_seconds - elapsed
-        if remaining > 0:
-            time.sleep(remaining)
-        self._last_request_at = time.monotonic()
+        with self._throttle_lock:
+            elapsed = time.monotonic() - self._last_request_at
+            remaining = self.delay_seconds - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+            self._last_request_at = time.monotonic()
 
     def _retry_sleep(self, attempt: int) -> None:
         delay = self.retry_backoff_seconds * attempt

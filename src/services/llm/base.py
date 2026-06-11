@@ -15,7 +15,6 @@ import httpx
 from src.config import config
 from src.services.logger import log_api_request_received, log_api_request_sent, log_error
 
-
 _SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧"
 
 

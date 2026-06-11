@@ -17,6 +17,7 @@ class ConfigGeneratorTest(unittest.TestCase):
             )
             result = ConfigGenerator._load_known_domain_config("example.com", configs_dir)
             self.assertIsNotNone(result)
+            assert result is not None
             self.assertEqual(result["chapter_link_selector"], "a")
 
     def test_load_known_domain_config_returns_none_for_unknown(self) -> None:
@@ -32,7 +33,11 @@ class ConfigGeneratorTest(unittest.TestCase):
     def test_html_cache_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             cache = _HtmlCache(Path(tempdir))
-            html = "<html><head><title>Real Page</title></head><body><p>" + "x" * 300 + "</p></body></html>"
+            html = (
+                "<html><head><title>Real Page</title></head><body><p>"
+                + "x" * 300
+                + "</p></body></html>"
+            )
             cache.set("https://example.com", html)
             self.assertEqual(cache.get("https://example.com"), html)
             self.assertIsNone(cache.get("https://other.com"))

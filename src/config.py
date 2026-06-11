@@ -16,7 +16,10 @@ from dotenv import load_dotenv
 load_dotenv(interpolate=True)
 
 
-DEFAULT_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+)
 
 
 @dataclass
@@ -67,6 +70,7 @@ class SiteConfig:
     start_url: str
     chapter_link_selector: str
     chapter_content_selector: str
+    version: int = 1
     novel_title_selector: str | None = None
     author_selector: str | None = None
     toc_next_selector: str | None = None
@@ -91,6 +95,8 @@ class SiteConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SiteConfig:
+        data = cls._migrate(data)
+
         required = [
             "name",
             "start_url",
@@ -112,6 +118,7 @@ class SiteConfig:
             start_url=str(data["start_url"]),
             chapter_link_selector=str(data["chapter_link_selector"]),
             chapter_content_selector=str(data["chapter_content_selector"]),
+            version=int(data.get("version", 1)),
             novel_title_selector=_optional_str(data.get("novel_title_selector")),
             author_selector=_optional_str(data.get("author_selector")),
             toc_next_selector=_optional_str(data.get("toc_next_selector")),
@@ -126,6 +133,28 @@ class SiteConfig:
             max_toc_pages=int(data.get("max_toc_pages", 50)),
             user_agent=str(data.get("user_agent", DEFAULT_USER_AGENT)),
         )
+
+    @staticmethod
+    def _migrate(data: dict[str, Any]) -> dict[str, Any]:
+        """Migrate older config schemas to the current version."""
+        version_val = data.get("version", 1)
+        try:
+            version = int(version_val)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid config version: {version_val}") from e
+
+        if version < 1:
+            data["version"] = 1
+        elif version > 1:
+            raise ValueError(
+                f"Unsupported future config version: {version}. "
+                f"Current schema version is 1."
+            )
+        # Future migrations go here:
+        # if version < 2:
+        #     data.setdefault("new_field", "default")
+        #     data["version"] = 2
+        return data
 
 
 def _optional_str(value: Any) -> str | None:
