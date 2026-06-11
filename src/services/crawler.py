@@ -20,6 +20,7 @@ from src.models import (
     NovelMetadata,
 )
 from src.services.http import FetchError, FetchResponse, HttpClient
+from src.services.metadata import metadata_to_dict
 from src.utils.text import html_to_plain_text, normalize_text, slugify
 
 ProgressCallback = Callable[[CrawlProgress], None]
@@ -379,7 +380,7 @@ class NovelCrawler:
             "updated_at": datetime.now(UTC).isoformat(),
             "status": status,
             "config": asdict(self.config),
-            "metadata": self._metadata_dict(metadata),
+            "metadata": metadata_to_dict(metadata),
             "runtime_output_dir": str(runtime_output_dir),
             "chapter_output_dir": str(chapter_output_dir),
             "total_chapters": len(chapter_links),
@@ -396,19 +397,8 @@ class NovelCrawler:
         }
         self._write_json(path, manifest)
 
-    @staticmethod
-    def _metadata_dict(metadata: NovelMetadata) -> dict[str, object]:
-        return {
-            "title": metadata.title,
-            "translated": metadata.translated,
-            "author": metadata.author,
-            "source_url": metadata.source_url,
-            "illustration_url": metadata.illustration_url,
-            "site_name": metadata.site_name,
-        }
-
     def _write_metadata(self, path: Path, metadata: NovelMetadata) -> None:
-        self._write_json(path, self._metadata_dict(metadata))
+        self._write_json(path, metadata_to_dict(metadata))
 
     @staticmethod
     def _chapter_text(title: str, body: str) -> str:

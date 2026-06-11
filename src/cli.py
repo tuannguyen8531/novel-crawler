@@ -13,12 +13,14 @@ from src.models import CrawlProgress
 from src.services.browser import BrowserFetcher
 from src.services.config_generator import ConfigGenerator
 from src.services.crawler import NovelCrawler
+from src.services.epub_importer import EpubImportError, import_epub
 from src.services.http import FetchError, HttpClient
 from src.services.llm import get_llm
 from src.utils.logging import get_logger, setup_logging
 
 RUNTIME_OUTPUT_ROOT = Path("data")
 CONFIG_DIR = Path("configs")
+DEFAULT_SHARE_ROOT = Path("../share")
 _quiet_output = False
 
 
@@ -51,6 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_validate_arguments(validate)
 
+    import_parser = subparsers.add_parser(
+        "import",
+        help="Import an EPUB into shared translator input files.",
+    )
+    _add_import_arguments(import_parser)
+
     return parser
 
 
@@ -78,6 +86,15 @@ def build_validate_parser() -> argparse.ArgumentParser:
         description="Test a config's selectors against live HTML.",
     )
     _add_validate_arguments(parser)
+    return parser
+
+
+def build_import_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="import",
+        description="Import an EPUB into shared translator input files.",
+    )
+    _add_import_arguments(parser)
     return parser
 
 
@@ -181,6 +198,28 @@ def _add_validate_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_import_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("epub", type=Path, help="EPUB file path to import.")
+    parser.add_argument(
+        "-n",
+        "--name",
+        type=str,
+        default=None,
+        help="Output slug name. Defaults to EPUB title or filename.",
+    )
+    parser.add_argument(
+        "--share-output",
+        type=Path,
+        default=None,
+        help="Shared output root. Default: NOVEL_SHARE_DIR or ../share.",
+    )
+    parser.add_argument(
+        "--keep-existing",
+        action="store_true",
+        help="Keep existing chapter_*.txt files in the target input directory.",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -193,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         return _generate(args)
     if args.command == "validate":
         return _validate(args)
+    if args.command == "import":
+        return _import_epub(args)
 
     parser.error(f"Unknown command: {args.command}")
     return 2
@@ -217,6 +258,13 @@ def validate_main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _setup_cli_logging()
     return _validate(args)
+
+
+def import_main(argv: list[str] | None = None) -> int:
+    parser = build_import_parser()
+    args = parser.parse_args(argv)
+    _setup_cli_logging()
+    return _import_epub(args)
 
 
 def _setup_cli_logging(*, verbose: bool = False, quiet: bool = False) -> None:
@@ -313,6 +361,29 @@ def _run_crawl(
     skipped = sum(1 for ch in result.chapters if ch.skipped)
     fetched = len(result.chapters) - skipped
     _print_output(f"Done: {result.metadata.title} ({fetched} new, {skipped} skipped)")
+    return 0
+
+
+def _import_epub(args: argparse.Namespace) -> int:
+    try:
+        share_root = args.share_output or config.share_path or DEFAULT_SHARE_ROOT
+        result = import_epub(
+            args.epub,
+            share_root,
+            name=args.name,
+            keep_existing=args.keep_existing,
+        )
+    except (OSError, ValueError, EpubImportError) as error:
+        get_logger().error("Error: %s", error)
+        return 1
+
+    for warning in result.warnings:
+        get_logger().warning(warning)
+    _print_output(
+        f"Imported: {result.metadata.title} "
+        f"({len(result.chapters)} chapters, {len(result.illustrations)} illustrations)"
+    )
+    _print_output(f"Output: {result.output_dir}")
     return 0
 
 

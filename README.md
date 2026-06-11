@@ -6,6 +6,7 @@ CLI tool for downloading web novel chapters from public websites using CSS selec
 
 - **Configurable selectors**: Per-site JSON config with CSS selectors for title, chapters, content
 - **AI config generation**: Use Ollama or Gemini to auto-generate site configs from a TOC URL
+- **EPUB import**: Split EPUB spine sections into `chapter_N.txt` translator input files
 - **Auto-resume**: Skips already-downloaded chapters, continues from where it left off
 - **Browser mode**: Playwright headless browser for sites with JavaScript challenges (Cloudflare)
 - **Concurrent browser pages**: One Chromium session with isolated pages for parallel chapter downloads
@@ -147,7 +148,24 @@ uv run crawl my-site --browser --max 20
 uv run crawl my-site --browser --overwrite
 ```
 
-### Options
+### 4. Import an EPUB
+
+```bash
+# Import EPUB into ../share/{slug}/input/
+uv run import path/to/book.epub
+
+# Override the output slug
+uv run import path/to/book.epub -n military-training
+
+# Use a different share root
+uv run import path/to/book.epub -n military-training --share-output ../share
+```
+
+The importer reads EPUB OPF metadata for title and author, extracts readable spine sections,
+normalizes chapter files to `chapter_N.txt`, copies referenced images into `illustrations/`,
+and writes metadata beside `input/`.
+
+### crawl Options
 
 | Flag | Description |
 |------|-------------|
@@ -179,7 +197,18 @@ uv run crawl my-site --browser --overwrite
 | `target` | Config path or novel name (matches `configs/{novel}.json`) |
 | `-b, --browser` | Use headless browser to fetch pages |
 
+### import Options
+
+| Flag | Description |
+|------|-------------|
+| `epub` | EPUB file path to import |
+| `-n, --name NAME` | Output slug name. Defaults to EPUB title or filename |
+| `--share-output PATH` | Override shared output root. Default: `NOVEL_SHARE_DIR` or `../share` |
+| `--keep-existing` | Keep existing `chapter_*.txt` files in the target input directory |
+
 ## How it works
+
+### Crawl workflow
 
 1. Reads site config from `configs/{novel}.json`
 2. Fetches the table of contents page, extracts chapter links via CSS selector
@@ -190,18 +219,28 @@ uv run crawl my-site --browser --overwrite
 7. On resume: skips chapters where `chapter_N.txt` exists and is non-empty
 8. `--max` counts only newly fetched chapters, not skipped ones
 
+### EPUB import workflow
+
+1. Reads `META-INF/container.xml` and the OPF package document
+2. Extracts `dc:title` and `dc:creator` when present
+3. Reads each readable document in EPUB spine order
+4. Uses explicit chapter markers such as `Chapter 1`, `Chương 1`, `第1章`, or `1화` when present
+5. Falls back to spine order for title-only EPUBs, skipping cover/nav/notice/front matter
+6. Writes `chapter_N.txt`, `illustrations/003-001.jpg`, and `metadata.json` to `../share/{novel}/`
+
 ### Output
 
-Each crawl produces two output groups:
+Crawler and EPUB import outputs share the same translator input layout:
 
-- `../share/{novel}/`: Translator input files and crawl metadata
-- `output/{novel}/`: Crawler runtime state
+- `../share/{novel}/`: Translator input files and metadata
+- `output/{novel}/`: Crawler runtime state for web crawls
 
 In `../share/{novel}/`:
 - `input/chapter_1.txt`, `input/chapter_2.txt`, ...: Individual chapter files
+- `illustrations/003-001.jpg`, ...: EPUB images named by chapter number and image number within that chapter when importing EPUBs
 - `metadata.json`: Novel title, translation placeholders, author, source URL, illustration URL, site name
 
-In `output/{novel}/`:
+In `output/{novel}/` for web crawls:
 - `config.json`: Snapshot of the config used for this crawl
 - `metadata.json`: Novel title, translation placeholders, author, source URL, illustration URL, site name
 - `manifest.json`: Progress, discovered chapters, results, errors
@@ -252,6 +291,8 @@ fetch → parse → extract → clean → write → track
 | `models/` | Data models: ChapterLink, NovelMetadata, ChapterResult, CrawlProgress |
 | `services/crawler.py` | NovelCrawler: chapter discovery, crawl loop, manifest tracking |
 | `services/config_generator.py` | AI-assisted site config generation (2-phase: TOC + chapter) |
+| `services/epub_importer.py` | EPUB import: OPF metadata, spine text extraction, chapter normalization |
+| `services/metadata.py` | Shared metadata serialization for crawler and EPUB import outputs |
 | `services/http.py` | HttpClient: stdlib urllib, cookies, robots.txt, retry, encoding detection |
 | `services/browser.py` | BrowserFetcher: async Playwright pool with one shared Chromium context; falls back to system Chrome when the bundled browser is unavailable |
 | `services/llm/` | LLM providers: Ollama, Gemini with retry, logging, spinner |
@@ -264,7 +305,7 @@ fetch → parse → extract → clean → write → track
 ├── main.py                # Direct Python entry point
 ├── src/
 │   ├── __init__.py
-│   ├── cli.py             # CLI with argparse (crawl / generate / validate / novel-crawler entry points)
+│   ├── cli.py             # CLI with argparse (crawl / generate / validate / import)
 │   ├── config.py          # SiteConfig + python-dotenv + LLM settings
 │   ├── models/
 │   │   └── __init__.py    # ChapterLink, NovelMetadata, ChapterResult, CrawlResult, CrawlProgress
@@ -272,6 +313,8 @@ fetch → parse → extract → clean → write → track
 │   │   ├── __init__.py
 │   │   ├── crawler.py     # NovelCrawler: discovery, crawl loop, manifest
 │   │   ├── config_generator.py  # AI config generator (2-phase: TOC + chapter)
+│   │   ├── epub_importer.py  # EPUB import into shared translator input
+│   │   ├── metadata.py    # Shared metadata JSON serialization
 │   │   ├── http.py        # HttpClient: urllib-based fetcher with retry/cookies
 │   │   ├── browser.py     # BrowserFetcher: Playwright Chromium fetcher
 │   │   └── llm/           # LLM provider abstraction
@@ -287,6 +330,7 @@ fetch → parse → extract → clean → write → track
 ├── tests/                 # Test suite grouped by component
 │   ├── test_cli.py        # CLI argument parsing, config resolution
 │   ├── test_crawler.py    # Crawl workflow, resume, overwrite, progress
+│   ├── test_epub_importer.py  # EPUB metadata extraction and chapter normalization
 │   ├── test_env.py        # Config loading, defaults
 │   └── test_http.py       # HTTP retry behavior
 ├── configs/               # Per-site JSON configurations
@@ -306,6 +350,7 @@ Individual test files:
 
 ```bash
 uv run python -m unittest tests/test_crawler.py
+uv run python -m unittest tests/test_epub_importer.py
 uv run python -m unittest tests/test_http.py
 uv run python -m unittest tests/test_cli.py
 ```

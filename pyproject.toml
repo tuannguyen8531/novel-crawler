@@ -16,6 +16,7 @@ novel-crawler = "src.cli:main"
 crawl = "src.cli:crawl_main"
 generate = "src.cli:generate_main"
 validate = "src.cli:validate_main"
+import = "src.cli:import_main"
 
 [build-system]
 requires = ["hatchling"]

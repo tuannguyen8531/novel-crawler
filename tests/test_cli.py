@@ -10,7 +10,7 @@ import unittest.mock
 from pathlib import Path
 
 from src import cli
-from src.cli import _resolve_config_path, build_parser, build_short_parser
+from src.cli import _resolve_config_path, build_import_parser, build_parser, build_short_parser
 from src.models import CrawlProgress
 from src.utils.logging import get_logger, setup_logging
 
@@ -36,6 +36,19 @@ class CliTest(unittest.TestCase):
         args = build_parser().parse_args(["validate", "demo"])
         self.assertEqual(args.command, "validate")
         self.assertEqual(args.target, "demo")
+
+    def test_import_parser_accepts_name_and_share_output(self) -> None:
+        args = build_parser().parse_args(
+            ["import", "book.epub", "-n", "manual-name", "--share-output", "/tmp/share"]
+        )
+        short_args = build_import_parser().parse_args(["book.epub", "--keep-existing"])
+
+        self.assertEqual(args.command, "import")
+        self.assertEqual(args.epub, Path("book.epub"))
+        self.assertEqual(args.name, "manual-name")
+        self.assertEqual(args.share_output, Path("/tmp/share"))
+        self.assertEqual(short_args.epub, Path("book.epub"))
+        self.assertTrue(short_args.keep_existing)
 
     def test_crawl_validation_rejects_zero_workers(self) -> None:
         import argparse
