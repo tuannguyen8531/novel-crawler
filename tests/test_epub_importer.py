@@ -9,6 +9,7 @@ from xml.sax.saxutils import escape
 
 from src.services.epub_importer import (
     EpubSection,
+    TextExtractor,
     detect_chapter_number,
     import_epub,
     select_processed_chapters,
@@ -16,6 +17,16 @@ from src.services.epub_importer import (
 
 
 class EpubImporterTest(unittest.TestCase):
+    def test_text_extractor_keeps_image_position_between_paragraphs(self) -> None:
+        extractor = TextExtractor()
+        extractor.feed('<p>Before image.</p><img src="image.jpg"/><p>After image.</p>')
+        extractor.close()
+
+        self.assertEqual(
+            extractor.get_text(),
+            "Before image.\n\n[[EPUB_IMAGE:1]]\n\nAfter image.",
+        )
+
     def test_detects_supported_chapter_formats(self) -> None:
         cases = {
             "1화 - 회귀": 1,
@@ -120,6 +131,22 @@ class EpubImporterTest(unittest.TestCase):
         self.assertIn("Chapter 1: Start", chapter_one)
         self.assertIn("Hello world.", chapter_one)
 
+    def test_import_defaults_output_slug_to_filename_not_epub_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            epub_path = root / "downloaded-book.epub"
+            write_epub(
+                epub_path,
+                title="Completely Different EPUB Title",
+                author=None,
+                sections=[("chapter-1.xhtml", "Chapter 1: Start", "Hello world.")],
+            )
+
+            result = import_epub(epub_path, root / "share")
+
+        self.assertEqual(result.output_dir, str(root / "share" / "downloaded-book"))
+        self.assertEqual(result.metadata.title, "Completely Different EPUB Title")
+
     def test_import_writes_illustrations_with_order_and_chapter_number(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -147,6 +174,12 @@ class EpubImporterTest(unittest.TestCase):
             illustrations_dir = root / "share" / "illustrated" / "illustrations"
             first_image = (illustrations_dir / "001-001.jpg").read_bytes()
             second_image = (illustrations_dir / "002-001.png").read_bytes()
+            chapter_one = (
+                root / "share" / "illustrated" / "input" / "chapter_1.txt"
+            ).read_text(encoding="utf-8")
+            chapter_two = (
+                root / "share" / "illustrated" / "input" / "chapter_2.txt"
+            ).read_text(encoding="utf-8")
 
         self.assertEqual(
             [Path(illustration.path).name for illustration in result.illustrations],
@@ -162,6 +195,12 @@ class EpubImporterTest(unittest.TestCase):
         )
         self.assertEqual(first_image, b"first-image")
         self.assertEqual(second_image, b"second-image")
+        self.assertIn("Hello world.\n\n[[ILLUSTRATION:001-001.jpg]]", chapter_one)
+        self.assertIn(
+            "Second chapter.\n\n[[ILLUSTRATION:002-001.png]]\n\n"
+            "[[ILLUSTRATION:002-002.webp]]",
+            chapter_two,
+        )
 
     def test_import_falls_back_to_name_and_cleans_existing_chapters(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

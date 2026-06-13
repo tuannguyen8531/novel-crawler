@@ -16,6 +16,8 @@ from src.services.metadata import metadata_to_dict
 from src.utils.text import slugify
 
 CONTAINER_PATH = "META-INF/container.xml"
+EPUB_IMAGE_PLACEHOLDER = "[[EPUB_IMAGE:{index}]]"
+ILLUSTRATION_MARKER = "[[ILLUSTRATION:{filename}]]"
 CHAPTER_PATTERNS = [
     re.compile(r"(?<!\d)(?:제\s*)?(\d+)\s*(?:화|장)(?!\d)", re.IGNORECASE),
     re.compile(r"第\s*(\d+)\s*[章节話话回]", re.IGNORECASE),
@@ -133,6 +135,11 @@ class TextExtractor(HTMLParser):
             )
             if src:
                 self.image_sources.append(html.unescape(src))
+                self._add_break()
+                self._parts.append(
+                    EPUB_IMAGE_PLACEHOLDER.format(index=len(self.image_sources))
+                )
+                self._add_break()
         if tag in self.BLOCK_TAGS:
             self._add_break()
         if not self.title and tag in self.TITLE_TAGS:
@@ -188,7 +195,7 @@ def import_epub(
     author = normalize_whitespace(book.metadata.author or "") or None
     source_url = epub_path.resolve().as_uri()
     fallback_slug = slugify(epub_path.stem, fallback="epub")
-    novel_slug = slugify(name or title, fallback=fallback_slug)
+    novel_slug = slugify(name or epub_path.stem, fallback=fallback_slug)
     processed_chapters = select_processed_chapters(book.sections)
     if not processed_chapters:
         raise EpubImportError(f"no importable chapters found in {epub_path}")
@@ -224,22 +231,17 @@ def import_epub(
                 continue
 
             used_chapters.add(chapter_number)
-            path = chapter_output_dir / f"chapter_{chapter_number}.txt"
-            write_text_atomic(path, section.text.strip() + "\n")
-            chapters.append(
-                ChapterResult(
-                    index=chapter_number,
-                    title=section.title,
-                    source_url=f"{source_url}#{section.source_path}",
-                    path=str(path),
-                )
-            )
+            chapter_text = section.text
             chapter_illustration_index = 0
-            for image_path in section.image_paths:
+            for image_index, image_path in enumerate(section.image_paths, start=1):
                 try:
                     image_data = epub.read(image_path)
                 except KeyError:
                     warnings.append(f"missing image skipped: {image_path}")
+                    chapter_text = chapter_text.replace(
+                        EPUB_IMAGE_PLACEHOLDER.format(index=image_index),
+                        "",
+                    )
                     continue
 
                 illustration_index += 1
@@ -250,6 +252,10 @@ def import_epub(
                     image_path,
                 )
                 write_bytes_atomic(illustration_output, image_data)
+                chapter_text = chapter_text.replace(
+                    EPUB_IMAGE_PLACEHOLDER.format(index=image_index),
+                    ILLUSTRATION_MARKER.format(filename=illustration_output.name),
+                )
                 illustrations.append(
                     EpubIllustration(
                         index=illustration_index,
@@ -258,6 +264,17 @@ def import_epub(
                         path=str(illustration_output),
                     )
                 )
+
+            path = chapter_output_dir / f"chapter_{chapter_number}.txt"
+            write_text_atomic(path, chapter_text.strip() + "\n")
+            chapters.append(
+                ChapterResult(
+                    index=chapter_number,
+                    title=section.title,
+                    source_url=f"{source_url}#{section.source_path}",
+                    path=str(path),
+                )
+            )
 
     chapters.sort(key=lambda chapter_result: chapter_result.index)
     return EpubImportResult(
@@ -373,20 +390,22 @@ def read_section(epub: zipfile.ZipFile, source_path: str, index: int) -> EpubSec
     extractor.close()
     text = extractor.get_text()
     title = extractor.title or Path(source_path).stem
-    image_paths = tuple(
-        path
-        for path in (
-            resolve_resource_path(source_path, image_source)
-            for image_source in extractor.image_sources
-        )
-        if path and path in epub.namelist()
-    )
+    image_paths = []
+    for source_index, image_source in enumerate(extractor.image_sources, start=1):
+        source_placeholder = EPUB_IMAGE_PLACEHOLDER.format(index=source_index)
+        resolved_path = resolve_resource_path(source_path, image_source)
+        if not resolved_path or resolved_path not in epub.namelist():
+            text = text.replace(source_placeholder, "")
+            continue
+        image_paths.append(resolved_path)
+        target_placeholder = EPUB_IMAGE_PLACEHOLDER.format(index=len(image_paths))
+        text = text.replace(source_placeholder, target_placeholder)
     return EpubSection(
         index=index,
         source_path=source_path,
         title=title,
         text=text,
-        image_paths=image_paths,
+        image_paths=tuple(image_paths),
     )
 
 

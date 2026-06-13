@@ -163,7 +163,8 @@ uv run import path/to/book.epub -n military-training --share-output ../share
 
 The importer reads EPUB OPF metadata for title and author, extracts readable spine sections,
 normalizes chapter files to `chapter_N.txt`, copies referenced images into `illustrations/`,
-and writes metadata beside `input/`.
+and writes metadata beside `input/`. Each image position is preserved in chapter text with a
+marker such as `[[ILLUSTRATION:003-001.jpg]]` so translation and packaging can restore it.
 
 ### crawl Options
 
@@ -202,7 +203,7 @@ and writes metadata beside `input/`.
 | Flag | Description |
 |------|-------------|
 | `epub` | EPUB file path to import |
-| `-n, --name NAME` | Output slug name. Defaults to EPUB title or filename |
+| `-n, --name NAME` | Output slug name. Defaults to the EPUB filename |
 | `--share-output PATH` | Override shared output root. Default: `NOVEL_SHARE_DIR` or `../share` |
 | `--keep-existing` | Keep existing `chapter_*.txt` files in the target input directory |
 
@@ -227,6 +228,7 @@ and writes metadata beside `input/`.
 4. Uses explicit chapter markers such as `Chapter 1`, `Chương 1`, `第1章`, or `1화` when present
 5. Falls back to spine order for title-only EPUBs, skipping cover/nav/notice/front matter
 6. Writes `chapter_N.txt`, `illustrations/003-001.jpg`, and `metadata.json` to `../share/{novel}/`
+7. Inserts `[[ILLUSTRATION:003-001.jpg]]` at the original image position in chapter text
 
 ### Output
 

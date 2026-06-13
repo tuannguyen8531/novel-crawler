@@ -205,7 +205,7 @@ def _add_import_arguments(parser: argparse.ArgumentParser) -> None:
         "--name",
         type=str,
         default=None,
-        help="Output slug name. Defaults to EPUB title or filename.",
+        help="Output slug name. Defaults to the EPUB filename.",
     )
     parser.add_argument(
         "--share-output",
