@@ -109,6 +109,7 @@ Edit `configs/my-site.json` with CSS selectors matching the target website:
   "remove_selectors": ["script", "style", ".ads"],
   "same_domain": true,
   "reverse_chapter_order": false,
+  "filter_non_chapter_links": true,
   "request_delay_seconds": 1.5,
   "timeout_seconds": 60,
   "retry_attempts": 3,
@@ -212,13 +213,14 @@ marker such as `[[ILLUSTRATION:003-001.jpg]]` so translation and packaging can r
 ### Crawl workflow
 
 1. Reads site config from `configs/{novel}.json`
-2. Fetches the table of contents page, extracts chapter links via CSS selector
-3. Paginates through TOC if `toc_next_selector` is set (up to `max_toc_pages`)
-4. For each chapter: fetches page, extracts content via selector, strips noise elements
-5. Writes `chapter_N.txt` to shared input directory (atomic write)
-6. Updates `manifest.json` after each chapter
-7. On resume: skips chapters where `chapter_N.txt` exists and is non-empty
-8. `--max` counts only newly fetched chapters, not skipped ones
+2. Fetches and paginates TOC pages if `toc_next_selector` is set (up to `max_toc_pages`)
+3. Extracts chapter links, removes notices, and prefers explicit chapter markers when available
+4. Keeps remaining titles as fallback when the site does not number chapters explicitly
+5. For each chapter: fetches page, extracts content via selector, strips noise elements
+6. Writes `chapter_N.txt` to shared input directory (atomic write)
+7. Updates `manifest.json` after each chapter
+8. On resume: skips chapters where `chapter_N.txt` exists and is non-empty
+9. `--max` counts only newly fetched chapters, not skipped ones
 
 ### EPUB import workflow
 
@@ -273,9 +275,10 @@ Skipped chapters are not printed. The summary line shows fetched vs skipped coun
 | `remove_selectors` | No | CSS selectors for elements to strip (ads, nav, etc.) |
 | `same_domain` | No | Only follow links on same domain (default: true) |
 | `reverse_chapter_order` | No | Reverse chapter order if TOC shows newest first |
+| `filter_non_chapter_links` | No | Automatically remove notices and prefer explicit chapter titles (default: true) |
 | `request_delay_seconds` | No | Delay between requests (default: 1.0) |
 | `timeout_seconds` | No | Request timeout (default: 30.0) |
-| `retry_attempts` | No | Retry count for network errors (default: 3) |
+| `retry_attempts` | No | Retry count for network errors or invalid chapter pages (default: 3) |
 | `retry_backoff_seconds` | No | Base backoff for retries (default: 2.0) |
 | `max_toc_pages` | No | Max TOC pages to paginate through (default: 50) |
 | `user_agent` | No | Custom User-Agent header |

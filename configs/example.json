@@ -16,6 +16,7 @@
   ],
   "same_domain": true,
   "reverse_chapter_order": false,
+  "filter_non_chapter_links": true,
   "request_delay_seconds": 1.5,
   "timeout_seconds": 30,
   "max_toc_pages": 50,

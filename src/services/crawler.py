@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict
@@ -21,6 +22,7 @@ from src.models import (
 )
 from src.services.http import FetchError, FetchResponse, HttpClient
 from src.services.metadata import metadata_to_dict
+from src.utils.chapters import select_likely_chapters
 from src.utils.text import html_to_plain_text, normalize_text, slugify
 
 ProgressCallback = Callable[[CrawlProgress], None]
@@ -34,6 +36,10 @@ class CrawlError(TypedDict):
     index: int
     url: str
     error: str
+
+
+class InvalidChapterContentError(FetchError):
+    """A fetched page did not contain usable chapter content."""
 
 
 class NovelCrawler:
@@ -93,6 +99,11 @@ class NovelCrawler:
                 break
             toc_url = next_url
 
+        if config.filter_non_chapter_links:
+            chapters = select_likely_chapters(
+                chapters,
+                title_getter=lambda chapter: chapter.title,
+            )
         if config.reverse_chapter_order:
             chapters.reverse()
         if metadata is None:
@@ -330,7 +341,25 @@ class NovelCrawler:
         return urljoin(current_url, href)
 
     def _fetch_chapter(self, chapter_link: ChapterLink) -> tuple[str, str, str]:
-        response = self.client.fetch(chapter_link.url)
+        attempts = max(1, self.config.retry_attempts)
+        for attempt in range(1, attempts + 1):
+            response = self.client.fetch(chapter_link.url)
+            try:
+                return self._extract_chapter(chapter_link, response)
+            except InvalidChapterContentError:
+                if attempt == attempts:
+                    raise
+                delay = self.config.retry_backoff_seconds * attempt
+                if delay > 0:
+                    time.sleep(delay)
+
+        raise AssertionError("Chapter retry loop exited unexpectedly.")
+
+    def _extract_chapter(
+        self,
+        chapter_link: ChapterLink,
+        response: FetchResponse,
+    ) -> tuple[str, str, str]:
         soup = BeautifulSoup(response.body, "html.parser")
 
         title = chapter_link.title
@@ -345,13 +374,13 @@ class NovelCrawler:
 
         content_node = soup.select_one(self.config.chapter_content_selector)
         if not content_node:
-            raise FetchError(
+            raise InvalidChapterContentError(
                 f"No chapter content found with selector: {self.config.chapter_content_selector}"
             )
 
         body = html_to_plain_text(content_node)
         if not body:
-            raise FetchError("Chapter content was empty after cleanup.")
+            raise InvalidChapterContentError("Chapter content was empty after cleanup.")
         return title, body, response.url
 
     @staticmethod

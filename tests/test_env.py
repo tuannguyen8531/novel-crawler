@@ -43,6 +43,7 @@ class SiteConfigTest(unittest.TestCase):
         })
         self.assertEqual(config.name, "test")
         self.assertEqual(config.request_delay_seconds, 1.0)
+        self.assertTrue(config.filter_non_chapter_links)
 
     def test_from_dict_single_remove_selector(self) -> None:
         config = SiteConfig.from_dict({
@@ -53,6 +54,17 @@ class SiteConfigTest(unittest.TestCase):
             "remove_selectors": "script",
         })
         self.assertEqual(config.remove_selectors, ("script",))
+
+    def test_can_disable_non_chapter_link_filtering(self) -> None:
+        config = SiteConfig.from_dict({
+            "name": "test",
+            "start_url": "https://example.com",
+            "chapter_link_selector": ".chapters a",
+            "chapter_content_selector": ".content",
+            "filter_non_chapter_links": False,
+        })
+
+        self.assertFalse(config.filter_non_chapter_links)
 
     def test_config_migration_validation(self) -> None:
         with self.assertRaises(ValueError) as ctx:

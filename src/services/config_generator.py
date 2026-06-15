@@ -642,6 +642,7 @@ class ConfigGenerator:
             "remove_selectors": deduped,
             "same_domain": True,
             "reverse_chapter_order": False,
+            "filter_non_chapter_links": True,
             "request_delay_seconds": 2.0,
             "timeout_seconds": 30,
             "max_toc_pages": max_toc_pages,

@@ -78,6 +78,7 @@ class SiteConfig:
     remove_selectors: tuple[str, ...] = ()
     same_domain: bool = True
     reverse_chapter_order: bool = False
+    filter_non_chapter_links: bool = True
     request_delay_seconds: float = 1.0
     timeout_seconds: float = 30.0
     retry_attempts: int = 3
@@ -126,6 +127,7 @@ class SiteConfig:
             remove_selectors=tuple(str(selector) for selector in remove_selectors),
             same_domain=bool(data.get("same_domain", True)),
             reverse_chapter_order=bool(data.get("reverse_chapter_order", False)),
+            filter_non_chapter_links=bool(data.get("filter_non_chapter_links", True)),
             request_delay_seconds=float(data.get("request_delay_seconds", 1.0)),
             timeout_seconds=float(data.get("timeout_seconds", 30.0)),
             retry_attempts=int(data.get("retry_attempts", 3)),

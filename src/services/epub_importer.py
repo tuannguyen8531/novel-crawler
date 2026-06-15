@@ -13,18 +13,12 @@ from xml.etree import ElementTree
 
 from src.models import ChapterResult, NovelMetadata
 from src.services.metadata import metadata_to_dict
+from src.utils.chapters import detect_chapter_number, is_obvious_non_chapter_title
 from src.utils.text import slugify
 
 CONTAINER_PATH = "META-INF/container.xml"
 EPUB_IMAGE_PLACEHOLDER = "[[EPUB_IMAGE:{index}]]"
 ILLUSTRATION_MARKER = "[[ILLUSTRATION:{filename}]]"
-CHAPTER_PATTERNS = [
-    re.compile(r"(?<!\d)(?:제\s*)?(\d+)\s*(?:화|장)(?!\d)", re.IGNORECASE),
-    re.compile(r"第\s*(\d+)\s*[章节話话回]", re.IGNORECASE),
-    re.compile(r"\b(?:chương|chuong)\s*(\d+)\b", re.IGNORECASE),
-    re.compile(r"\b(?:chapter|chap\.?|ch\.?)\s*#?\s*(\d+)\b", re.IGNORECASE),
-    re.compile(r"\b(?:episode|ep\.?)\s*#?\s*(\d+)\b", re.IGNORECASE),
-]
 
 
 @dataclass(frozen=True)
@@ -440,15 +434,6 @@ def select_processed_chapters(sections: list[EpubSection]) -> list[ProcessedChap
     return fallback_chapters
 
 
-def detect_chapter_number(title: str) -> int | None:
-    normalized_title = normalize_whitespace(title)
-    for pattern in CHAPTER_PATTERNS:
-        match = pattern.search(normalized_title)
-        if match:
-            return int(match.group(1))
-    return None
-
-
 def should_skip_fallback_section(section: EpubSection) -> bool:
     title = normalize_whitespace(section.title)
     title_lower = title.casefold()
@@ -464,11 +449,10 @@ def should_skip_fallback_section(section: EpubSection) -> bool:
         "title-page",
         "toc",
     )
-    notice_markers = ("notice", "공지")
 
     if not title:
         return True
-    if any(marker in title_lower for marker in notice_markers):
+    if is_obvious_non_chapter_title(title):
         return True
     if any(name in title_lower or name in source_name for name in front_matter_names):
         return True

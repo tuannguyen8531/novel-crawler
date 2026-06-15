@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from src.config import SiteConfig
@@ -71,6 +72,20 @@ class SuccessfulClient:
         )
 
 
+class InvalidThenSuccessfulClient:
+    def __init__(self, *, always_invalid: bool = False) -> None:
+        self.always_invalid = always_invalid
+        self.calls: list[str] = []
+
+    def fetch(self, url: str) -> FetchResponse:
+        self.calls.append(url)
+        if self.always_invalid or len(self.calls) == 1:
+            body = "<html><title>Please wait</title><body>Loading...</body></html>"
+        else:
+            body = "<h1>Chapter</h1><div class='content'>Recovered</div>"
+        return FetchResponse(url=url, body=body, content_type="text/html")
+
+
 class DelayedExistingCheckCrawler(NovelCrawler):
     @staticmethod
     def _is_existing_chapter(path: Path) -> bool:
@@ -120,6 +135,108 @@ def demo_pages() -> dict[str, str]:
 
 
 class NovelCrawlerTest(unittest.TestCase):
+    def test_fetch_chapter_retries_when_page_has_no_chapter_content(self) -> None:
+        config = replace(
+            demo_config(),
+            retry_attempts=3,
+            retry_backoff_seconds=0,
+        )
+        client = InvalidThenSuccessfulClient()
+        crawler = NovelCrawler(config, fetcher=client)
+
+        title, body, final_url = crawler._fetch_chapter(
+            ChapterLink(title="Fallback", url="https://public.example/c1")
+        )
+
+        self.assertEqual(title, "Chapter")
+        self.assertEqual(body, "Recovered")
+        self.assertEqual(final_url, "https://public.example/c1")
+        self.assertEqual(client.calls, [final_url, final_url])
+
+    def test_fetch_chapter_stops_after_content_retry_limit(self) -> None:
+        config = replace(
+            demo_config(),
+            retry_attempts=2,
+            retry_backoff_seconds=0,
+        )
+        client = InvalidThenSuccessfulClient(always_invalid=True)
+        crawler = NovelCrawler(config, fetcher=client)
+        chapter = ChapterLink(title="Fallback", url="https://public.example/c1")
+
+        with self.assertRaisesRegex(
+            FetchError,
+            "No chapter content found with selector: .content",
+        ):
+            crawler._fetch_chapter(chapter)
+
+        self.assertEqual(client.calls, [chapter.url, chapter.url])
+
+    def test_discover_filters_notices_and_prefers_explicit_chapter_titles(self) -> None:
+        pages = {
+            "https://public.example/novel": """
+                <h1 class="title">Demo Novel</h1>
+                <nav class="chapters">
+                  <a href="/notice">Notice: schedule update</a>
+                  <a href="/c1">第1章 Start</a>
+                  <a href="/extra">Bonus story</a>
+                  <a href="/c2">第2章 Next</a>
+                </nav>
+            """,
+        }
+        crawler = NovelCrawler(demo_config(), fetcher=FakeClient(pages))
+
+        _, chapters = crawler.discover_chapters()
+
+        self.assertEqual([chapter.title for chapter in chapters], ["第1章 Start", "第2章 Next"])
+
+    def test_discover_falls_back_to_unnumbered_titles_after_removing_notices(self) -> None:
+        pages = {
+            "https://public.example/novel": """
+                <h1 class="title">Demo Novel</h1>
+                <nav class="chapters">
+                  <a href="/opening">The Beginning</a>
+                  <a href="/notice">Announcement: maintenance</a>
+                  <a href="/next">A New Journey</a>
+                </nav>
+            """,
+        }
+        crawler = NovelCrawler(demo_config(), fetcher=FakeClient(pages))
+
+        _, chapters = crawler.discover_chapters()
+
+        self.assertEqual(
+            [chapter.title for chapter in chapters],
+            ["The Beginning", "A New Journey"],
+        )
+
+    def test_discover_can_disable_non_chapter_filtering(self) -> None:
+        config = SiteConfig.from_dict({
+            "name": "demo",
+            "start_url": "https://public.example/novel",
+            "novel_title_selector": "h1.title",
+            "chapter_link_selector": ".chapters a",
+            "chapter_content_selector": ".content",
+            "filter_non_chapter_links": False,
+            "request_delay_seconds": 0,
+        })
+        pages = {
+            "https://public.example/novel": """
+                <h1 class="title">Demo Novel</h1>
+                <nav class="chapters">
+                  <a href="/notice">Notice: schedule update</a>
+                  <a href="/c1">Chapter 1</a>
+                </nav>
+            """,
+        }
+        crawler = NovelCrawler(config, fetcher=FakeClient(pages))
+
+        _, chapters = crawler.discover_chapters()
+
+        self.assertEqual(
+            [chapter.title for chapter in chapters],
+            ["Notice: schedule update", "Chapter 1"],
+        )
+
     def test_crawl_writes_metadata_and_shared_chapter_text(self) -> None:
         crawler = NovelCrawler(demo_config())
         crawler.client = FakeClient(demo_pages())  # type: ignore[arg-type]
