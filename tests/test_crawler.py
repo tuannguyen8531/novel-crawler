@@ -25,6 +25,25 @@ class FakeClient:
         return FetchResponse(url=url, body=self.pages[url], content_type="text/html")
 
 
+class ExpandableTocClient(FakeClient):
+    def __init__(self, collapsed_page: str, expanded_page: str) -> None:
+        super().__init__({"https://public.example/novel": collapsed_page})
+        self.expanded_page = expanded_page
+        self.click_selectors: list[str] = []
+
+    def fetch_with_clicks(
+        self,
+        url: str,
+        click_selectors: list[str],
+        *,
+        wait_for_selector: str | None = None,
+    ) -> FetchResponse:
+        self.fetched_urls.append(url)
+        self.click_selectors.extend(click_selectors)
+        self.wait_for_selector = wait_for_selector
+        return FetchResponse(url=url, body=self.expanded_page, content_type="text/html")
+
+
 class FlakyClient:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -260,6 +279,108 @@ class NovelCrawlerTest(unittest.TestCase):
             [chapter.title for chapter in chapters],
             ["Notice: schedule update", "Chapter 1"],
         )
+
+    def test_discover_can_click_to_expand_toc_in_browser_mode(self) -> None:
+        config = replace(demo_config(), toc_expand_selector="text=Show all chapters")
+        client = ExpandableTocClient(
+            collapsed_page="""
+                <h1 class="title">Demo Novel</h1>
+                <nav class="chapters"><a href="/c2">Chapter 2</a></nav>
+            """,
+            expanded_page="""
+                <h1 class="title">Demo Novel</h1>
+                <nav class="chapters">
+                  <a href="/c1">Chapter 1</a>
+                  <a href="/c2">Chapter 2</a>
+                </nav>
+            """,
+        )
+        crawler = NovelCrawler(config, fetcher=client)
+
+        _, chapters = crawler.discover_chapters()
+
+        self.assertEqual([chapter.title for chapter in chapters], ["Chapter 1", "Chapter 2"])
+        self.assertEqual(client.click_selectors, ["text=Show all chapters"])
+        self.assertEqual(client.wait_for_selector, ".chapters a")
+
+    def test_discover_sorts_mixed_latest_and_full_numbered_toc(self) -> None:
+        pages = {
+            "https://public.example/novel": """
+                <h1 class="title">Demo Novel</h1>
+                <nav class="chapters">
+                  <a href="/c281">第281章 Extra</a>
+                  <a href="/c280">第280章 Extra</a>
+                  <a href="/c1">第1章 Start</a>
+                  <a href="/c2">第2章 Next</a>
+                </nav>
+            """,
+        }
+        crawler = NovelCrawler(demo_config(), fetcher=FakeClient(pages))
+
+        _, chapters = crawler.discover_chapters()
+
+        self.assertEqual(
+            [chapter.title for chapter in chapters],
+            ["第1章 Start", "第2章 Next", "第280章 Extra", "第281章 Extra"],
+        )
+
+    def test_discover_sorts_numbered_toc_descending_when_reversed(self) -> None:
+        config = replace(demo_config(), reverse_chapter_order=True)
+        pages = {
+            "https://public.example/novel": """
+                <h1 class="title">Demo Novel</h1>
+                <nav class="chapters">
+                  <a href="/c1">第1章 Start</a>
+                  <a href="/c2">第2章 Next</a>
+                  <a href="/c3">第3章 Last</a>
+                </nav>
+            """,
+        }
+        crawler = NovelCrawler(config, fetcher=FakeClient(pages))
+
+        _, chapters = crawler.discover_chapters()
+
+        self.assertEqual(
+            [chapter.title for chapter in chapters],
+            ["第3章 Last", "第2章 Next", "第1章 Start"],
+        )
+
+    def test_discover_extracts_illustration_url_from_cover_image(self) -> None:
+        config = replace(demo_config(), illustration_selector=".cover img")
+        pages = {
+            "https://public.example/novel": """
+                <h1 class="title">Demo Novel</h1>
+                <div class="cover"><img src="/images/cover.jpg"/></div>
+                <nav class="chapters"><a href="/c1">Chapter 1</a></nav>
+            """,
+        }
+        crawler = NovelCrawler(config, fetcher=FakeClient(pages))
+
+        metadata, _ = crawler.discover_chapters()
+
+        self.assertEqual(metadata.illustration_url, "https://public.example/images/cover.jpg")
+
+    def test_discover_extracts_illustration_url_from_background_style(self) -> None:
+        config = replace(demo_config(), illustration_selector=".cover")
+        pages = {
+            "https://public.example/novel": """
+                <h1 class="title">Demo Novel</h1>
+                <div class="cover" style="background-image: url('/images/bg-cover.webp')"></div>
+                <nav class="chapters"><a href="/c1">Chapter 1</a></nav>
+            """,
+        }
+        crawler = NovelCrawler(config, fetcher=FakeClient(pages))
+
+        metadata, _ = crawler.discover_chapters()
+
+        self.assertEqual(metadata.illustration_url, "https://public.example/images/bg-cover.webp")
+
+    def test_discover_requires_browser_for_toc_expand_selector(self) -> None:
+        config = replace(demo_config(), toc_expand_selector="text=Show all chapters")
+        crawler = NovelCrawler(config, fetcher=FakeClient(demo_pages()))
+
+        with self.assertRaisesRegex(FetchError, "requires browser mode"):
+            crawler.discover_chapters()
 
     def test_crawl_writes_metadata_and_shared_chapter_text(self) -> None:
         crawler = NovelCrawler(demo_config())

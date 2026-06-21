@@ -103,14 +103,18 @@ Return **only** a JSON object (no markdown fences) with these keys:
 {
   "novel_title_selector": "<CSS selector for the novel title, or null>",
   "author_selector": "<CSS selector for the author name, or null>",
+  "illustration_selector": "<CSS selector for the cover/illustration image URL, or null>",
   "chapter_link_selector": "<CSS selector that matches ALL chapter <a> links>",
-  "toc_next_selector": "<CSS selector for the 'next page' link if TOC is paginated, or null>"
+  "toc_next_selector": "<CSS selector for the 'next page' link if TOC is paginated, or null>",
+  "toc_expand_selector": "<Playwright selector for a 'show all chapters' control, or null>"
 }
 
 Rules:
 - Prefer **id** selectors (e.g. ``#catalog``) or **specific class** chains (e.g. ``#catalog ul li a``) over bare tag names or generic classes like ``.main-content``.
 - ``chapter_link_selector`` must match <a> elements whose ``href`` points to individual chapter pages. It should NOT match unrelated links (home, profile, ads).
 - ``novel_title_selector`` should target the actual novel name, usually inside an ``<h1>`` or a breadcrumb. Example: ``#catalog h1 a``.
+- ``illustration_selector`` should target the novel cover image, metadata such as ``meta[property="og:image"]``, or an element whose inline style has ``background-image: url(...)``. It must expose an image URL through ``src``, ``data-src``, ``data-original``, ``content``, ``href``, ``srcset``, or CSS ``url(...)``.
+- ``toc_expand_selector`` is only for pages that hide most chapters behind a button/link such as "show all chapters" or "full chapter list". Prefer a Playwright text selector such as ``text=查看完整章节目录`` when no stable id/class exists.
 - If you cannot determine a selector, set its value to ``null``.
 - Output **pure JSON only** — no commentary, no markdown.
 
@@ -118,8 +122,10 @@ Example for a typical Chinese novel site:
 {
   "novel_title_selector": "#catalog h1 a",
   "author_selector": null,
+  "illustration_selector": ".book-cover img",
   "chapter_link_selector": "#catalog ul li a",
-  "toc_next_selector": null
+  "toc_next_selector": null,
+  "toc_expand_selector": null
 }\
 """
 
@@ -168,6 +174,8 @@ Please look again at the cleaned HTML and return corrected selectors.
 Pay special attention to:
 - The list of chapter links — what ``id`` or ``class`` wraps the <ul> or <ol> of links?
 - The novel title — is it inside ``<h1>`` or a breadcrumb?
+- The cover image — is there an ``img`` near the novel info, or a ``meta[property="og:image"]`` tag?
+- Hidden TOCs — if the HTML has a "show all chapters" control, return it as ``toc_expand_selector``.
 
 Return **only** the JSON object, no markdown.\
 """
@@ -291,8 +299,10 @@ class ConfigGenerator:
                 {
                     "novel_title_selector": known.get("novel_title_selector"),
                     "author_selector": known.get("author_selector"),
+                    "illustration_selector": known.get("illustration_selector"),
                     "chapter_link_selector": known.get("chapter_link_selector"),
                     "toc_next_selector": known.get("toc_next_selector"),
+                    "toc_expand_selector": known.get("toc_expand_selector"),
                 }
                 if phase == "toc"
                 else {
@@ -534,6 +544,9 @@ class ConfigGenerator:
                 selector = result.get(key)
                 if selector and not soup.select(selector):
                     issues.append(f"{key} matches 0 elements")
+            selector = result.get("illustration_selector")
+            if selector and not soup.select(selector):
+                issues.append("illustration_selector matches 0 elements")
         elif call_type.startswith("gen-config-chapter"):
             content_sel = result.get("chapter_content_selector")
             if content_sel and not soup.select(content_sel):
@@ -635,8 +648,10 @@ class ConfigGenerator:
             "version": 1,
             "novel_title_selector": _or(toc.get("novel_title_selector"), None),
             "author_selector": _or(toc.get("author_selector"), None),
+            "illustration_selector": _or(toc.get("illustration_selector"), None),
             "chapter_link_selector": _or(toc.get("chapter_link_selector"), "a"),
             "toc_next_selector": _or(toc_next, None),
+            "toc_expand_selector": _or(toc.get("toc_expand_selector"), None),
             "chapter_title_selector": _or(chapter.get("chapter_title_selector"), None),
             "chapter_content_selector": _or(chapter.get("chapter_content_selector"), "body"),
             "remove_selectors": deduped,

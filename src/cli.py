@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,44 @@ RUNTIME_OUTPUT_ROOT = Path("data")
 CONFIG_DIR = Path("configs")
 DEFAULT_SHARE_ROOT = Path("../share")
 _quiet_output = False
+_progress_printer: CrawlProgressPrinter | None = None
+
+
+class CrawlProgressPrinter:
+    _SPINNER = ("-", "\\", "|", "/")
+
+    def __init__(self) -> None:
+        self._last_line = ""
+        self._spinner_index = 0
+        self._lock = threading.Lock()
+
+    def update(self, progress: CrawlProgress) -> None:
+        with self._lock:
+            spinner = self._SPINNER[self._spinner_index % len(self._SPINNER)]
+            self._spinner_index += 1
+
+            if progress.status == "started":
+                label = "fetching"
+            elif progress.status == "fetched":
+                label = "last"
+            elif progress.status == "skipped":
+                label = "skipped"
+            else:
+                label = progress.status
+
+            line = f"  {spinner} [{progress.current}/{progress.total}] {label}: {progress.title}"
+            self._last_line = line
+
+            sys.stdout.write(f"\r\033[K{line}")
+            sys.stdout.flush()
+
+    def finish(self) -> None:
+        with self._lock:
+            if not self._last_line:
+                return
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            self._last_line = ""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -268,8 +307,9 @@ def import_main(argv: list[str] | None = None) -> int:
 
 
 def _setup_cli_logging(*, verbose: bool = False, quiet: bool = False) -> None:
-    global _quiet_output
+    global _quiet_output, _progress_printer
     _quiet_output = quiet
+    _progress_printer = CrawlProgressPrinter()
     log_level = "debug" if verbose else ("error" if quiet else "info")
     setup_logging(log_level)
 
@@ -313,6 +353,7 @@ def _crawl(args: argparse.Namespace) -> int:
         get_logger().error("Error: %s", error)
         return 1
     except KeyboardInterrupt:
+        _finish_progress_line()
         get_logger().warning("Interrupted. Progress saved.")
         return 130
 
@@ -358,11 +399,13 @@ def _run_crawl(
             workers=args.workers,
         )
     except (OSError, ValueError, FetchError) as error:
+        _finish_progress_line()
         get_logger().error("Error: %s", error)
         return 1
 
     skipped = sum(1 for ch in result.chapters if ch.skipped)
     fetched = len(result.chapters) - skipped
+    _finish_progress_line()
     _print_output(f"Done: {result.metadata.title} ({fetched} new, {skipped} skipped)")
     return 0
 
@@ -411,12 +454,14 @@ def _resolve_config_path(target: str) -> Path:
 
 
 def _print_progress(progress: CrawlProgress) -> None:
-    if progress.status in ("started", "skipped"):
+    if _quiet_output:
         return
-    if progress.status == "fetched":
-        _print_output(f"[{progress.current}/{progress.total}] {progress.title}", flush=True)
+    if progress.status in ("started", "fetched", "skipped"):
+        printer = _progress_printer or CrawlProgressPrinter()
+        printer.update(progress)
         return
     if progress.status == "failed":
+        _finish_progress_line()
         detail = progress.error or "unknown error"
         print(
             f"[{progress.current}/{progress.total}] {progress.title} (fail: {detail})",
@@ -425,9 +470,28 @@ def _print_progress(progress: CrawlProgress) -> None:
         )
         return
 
-    _print_output(
-        f"[{progress.current}/{progress.total}] {progress.title} ({progress.status})",
-        flush=True,
+    printer = _progress_printer or CrawlProgressPrinter()
+    printer.update(progress)
+
+
+def _finish_progress_line() -> None:
+    if _quiet_output:
+        return
+    if _progress_printer is not None:
+        _progress_printer.finish()
+
+
+def _fetch_toc_for_config(fetcher: object, site_config: SiteConfig) -> Any:
+    if not site_config.toc_expand_selector:
+        return fetcher.fetch(site_config.start_url)  # type: ignore[attr-defined]
+
+    fetch_with_clicks = getattr(fetcher, "fetch_with_clicks", None)
+    if fetch_with_clicks is None:
+        raise FetchError("toc_expand_selector requires browser mode (-b/--browser).")
+    return fetch_with_clicks(
+        site_config.start_url,
+        [site_config.toc_expand_selector],
+        wait_for_selector=site_config.chapter_link_selector,
     )
 
 
@@ -515,7 +579,7 @@ def _validate(args: argparse.Namespace) -> int:
             # --- TOC validation ---
             print("📖 TOC Page")
             print(f"   URL: {site_config.start_url}")
-            toc_html = fetcher.fetch(site_config.start_url).body
+            toc_html = _fetch_toc_for_config(fetcher, site_config).body
             toc_soup = BeautifulSoup(toc_html, "html.parser")
 
             for label, selector in [
@@ -523,6 +587,7 @@ def _validate(args: argparse.Namespace) -> int:
                 ("author_selector", site_config.author_selector),
                 ("chapter_link_selector", site_config.chapter_link_selector),
                 ("toc_next_selector", site_config.toc_next_selector),
+                ("toc_expand_selector", site_config.toc_expand_selector),
             ]:
                 if selector:
                     matches = len(toc_soup.select(selector))

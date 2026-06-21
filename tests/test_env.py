@@ -44,6 +44,27 @@ class SiteConfigTest(unittest.TestCase):
         self.assertEqual(config.name, "test")
         self.assertEqual(config.request_delay_seconds, 1.0)
         self.assertTrue(config.filter_non_chapter_links)
+        self.assertIsNone(config.toc_expand_selector)
+
+    def test_from_dict_accepts_toc_expand_selector(self) -> None:
+        config = SiteConfig.from_dict({
+            "name": "test",
+            "start_url": "https://example.com",
+            "chapter_link_selector": ".chapters a",
+            "chapter_content_selector": ".content",
+            "toc_expand_selector": "text=Show all chapters",
+        })
+        self.assertEqual(config.toc_expand_selector, "text=Show all chapters")
+
+    def test_from_dict_accepts_illustration_selector(self) -> None:
+        config = SiteConfig.from_dict({
+            "name": "test",
+            "start_url": "https://example.com",
+            "chapter_link_selector": ".chapters a",
+            "chapter_content_selector": ".content",
+            "illustration_selector": ".cover img",
+        })
+        self.assertEqual(config.illustration_selector, ".cover img")
 
     def test_from_dict_single_remove_selector(self) -> None:
         config = SiteConfig.from_dict({

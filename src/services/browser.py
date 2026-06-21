@@ -186,7 +186,29 @@ class BrowserFetcher:
         self._start()
         return self._submit(self._fetch(url))
 
-    async def _fetch(self, url: str) -> FetchResponse:
+    def fetch_with_clicks(
+        self,
+        url: str,
+        click_selectors: list[str],
+        *,
+        wait_for_selector: str | None = None,
+    ) -> FetchResponse:
+        self._start()
+        return self._submit(
+            self._fetch(
+                url,
+                click_selectors=click_selectors,
+                wait_for_selector=wait_for_selector,
+            )
+        )
+
+    async def _fetch(
+        self,
+        url: str,
+        *,
+        click_selectors: list[str] | None = None,
+        wait_for_selector: str | None = None,
+    ) -> FetchResponse:
         context = self._context
         semaphore = self._semaphore
         if context is None or semaphore is None:
@@ -207,6 +229,19 @@ class BrowserFetcher:
 
                         status = response.status
                         await page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        if click_selectors:
+                            before_count = (
+                                await self._selector_count(page, wait_for_selector)
+                                if wait_for_selector
+                                else None
+                            )
+                            await self._click_selectors(page, click_selectors)
+                            if wait_for_selector and before_count is not None:
+                                await self._wait_for_selector_growth(
+                                    page,
+                                    wait_for_selector,
+                                    before_count,
+                                )
                         body = await page.content()
                         final_url = page.url
 
@@ -238,6 +273,41 @@ class BrowserFetcher:
                 )
             finally:
                 await page.close()
+
+    async def _click_selectors(self, page: Any, selectors: list[str]) -> None:
+        for selector in selectors:
+            with suppress(Exception):
+                await page.wait_for_load_state("networkidle", timeout=5000)
+            locator = page.locator(selector).first
+            try:
+                count = await locator.count()
+            except Exception as error:
+                raise FetchError(f"Could not evaluate expand selector {selector}: {error}") from error
+            if count < 1:
+                raise FetchError(f"Expand selector did not match: {selector}")
+            try:
+                await locator.click(timeout=5000)
+                with suppress(Exception):
+                    await page.wait_for_load_state("domcontentloaded", timeout=5000)
+                with suppress(Exception):
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception as error:
+                raise FetchError(f"Could not click expand selector {selector}: {error}") from error
+
+    @staticmethod
+    async def _selector_count(page: Any, selector: str | None) -> int:
+        if not selector:
+            return 0
+        return int(await page.locator(selector).count())
+
+    @staticmethod
+    async def _wait_for_selector_growth(page: Any, selector: str, before_count: int) -> None:
+        with suppress(Exception):
+            await page.wait_for_function(
+                "(arg) => document.querySelectorAll(arg.selector).length > arg.beforeCount",
+                arg={"selector": selector, "beforeCount": before_count},
+                timeout=5000,
+            )
 
     async def _throttle(self) -> None:
         throttle_lock = self._throttle_lock

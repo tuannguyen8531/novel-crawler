@@ -139,6 +139,38 @@ class CliTest(unittest.TestCase):
             )
         self.assertEqual(output.getvalue(), "")
 
+    def test_progress_output_updates_single_line(self) -> None:
+        cli._setup_cli_logging()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            cli._print_progress(
+                CrawlProgress(
+                    current=1,
+                    total=3,
+                    status="started",
+                    title="Chapter 1",
+                    source_url="url",
+                )
+            )
+            cli._print_progress(
+                CrawlProgress(
+                    current=1,
+                    total=3,
+                    status="fetched",
+                    title="Chapter 1",
+                    source_url="url",
+                )
+            )
+            before_finish = output.getvalue()
+            cli._finish_progress_line()
+
+        self.assertIn("\r", before_finish)
+        self.assertNotIn("\n", before_finish)
+        self.assertIn("\033[K", before_finish)
+        self.assertIn("fetching: Chapter 1", before_finish)
+        self.assertIn("last: Chapter 1", before_finish)
+        self.assertTrue(output.getvalue().endswith("\n"))
+
     def test_short_crawl_entrypoint_configures_logging(self) -> None:
         error_output = io.StringIO()
         with contextlib.redirect_stderr(error_output):

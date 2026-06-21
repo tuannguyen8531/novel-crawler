@@ -102,8 +102,10 @@ Edit `configs/my-site.json` with CSS selectors matching the target website:
   "start_url": "https://example.com/novel/table-of-contents",
   "novel_title_selector": "h1",
   "author_selector": ".author",
+  "illustration_selector": ".book-cover img",
   "chapter_link_selector": ".chapter-list a",
   "toc_next_selector": "a.next",
+  "toc_expand_selector": "text=Show all chapters",
   "chapter_title_selector": "h1",
   "chapter_content_selector": ".chapter-content",
   "remove_selectors": ["script", "style", ".ads"],
@@ -270,11 +272,13 @@ Skipped chapters are not printed. The summary line shows fetched vs skipped coun
 | `chapter_content_selector` | Yes | CSS selector for chapter body content |
 | `novel_title_selector` | No | CSS selector for novel title on TOC page |
 | `author_selector` | No | CSS selector for author name |
+| `illustration_selector` | No | CSS selector for cover image, image metadata, or inline background image; writes `illustration_url` |
 | `toc_next_selector` | No | CSS selector for "next page" button on TOC |
+| `toc_expand_selector` | No | Playwright selector for a "show all chapters" control; requires `--browser` |
 | `chapter_title_selector` | No | CSS selector for chapter title on chapter page |
 | `remove_selectors` | No | CSS selectors for elements to strip (ads, nav, etc.) |
 | `same_domain` | No | Only follow links on same domain (default: true) |
-| `reverse_chapter_order` | No | Reverse chapter order if TOC shows newest first |
+| `reverse_chapter_order` | No | Descending order for numbered chapters; unnumbered TOCs are reversed as-is |
 | `filter_non_chapter_links` | No | Automatically remove notices and prefer explicit chapter titles (default: true) |
 | `request_delay_seconds` | No | Delay between requests (default: 1.0) |
 | `timeout_seconds` | No | Request timeout (default: 30.0) |

@@ -48,6 +48,28 @@ class ConfigGeneratorTest(unittest.TestCase):
             cache.set("https://example.com", "<html></html>")
             self.assertIsNone(cache.get("https://example.com"))
 
+    def test_build_config_includes_toc_expand_selector(self) -> None:
+        result = ConfigGenerator._build_config(
+            "https://example.com/book/1/",
+            "example",
+            {
+                "novel_title_selector": "h1",
+                "author_selector": ".author",
+                "illustration_selector": ".cover img",
+                "chapter_link_selector": ".chapters a",
+                "toc_next_selector": None,
+                "toc_expand_selector": "text=Show all chapters",
+            },
+            {
+                "chapter_title_selector": "h1",
+                "chapter_content_selector": ".content",
+                "remove_selectors": ["script", "style"],
+            },
+        )
+
+        self.assertEqual(result["toc_expand_selector"], "text=Show all chapters")
+        self.assertEqual(result["illustration_selector"], ".cover img")
+
 
 if __name__ == "__main__":
     unittest.main()

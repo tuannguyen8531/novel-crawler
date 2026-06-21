@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -22,14 +23,25 @@ from src.models import (
 )
 from src.services.http import FetchError, FetchResponse, HttpClient
 from src.services.metadata import metadata_to_dict
-from src.utils.chapters import select_likely_chapters
+from src.utils.chapters import detect_chapter_number, select_likely_chapters
 from src.utils.text import html_to_plain_text, normalize_text, slugify
 
 ProgressCallback = Callable[[CrawlProgress], None]
+_CSS_URL = re.compile(r"url\((['\"]?)(.*?)\1\)", re.IGNORECASE)
 
 
 class Fetcher(Protocol):
     def fetch(self, url: str) -> FetchResponse: ...
+
+
+class ExpandableFetcher(Fetcher, Protocol):
+    def fetch_with_clicks(
+        self,
+        url: str,
+        click_selectors: list[str],
+        *,
+        wait_for_selector: str | None = None,
+    ) -> FetchResponse: ...
 
 
 class CrawlError(TypedDict):
@@ -74,7 +86,7 @@ class NovelCrawler:
                 break
             visited_toc_urls.add(toc_url)
 
-            response = self.client.fetch(toc_url)
+            response = self._fetch_toc_page(toc_url)
             soup = BeautifulSoup(response.body, "html.parser")
             if metadata is None:
                 metadata = self._extract_metadata(soup, response.url)
@@ -104,8 +116,7 @@ class NovelCrawler:
                 chapters,
                 title_getter=lambda chapter: chapter.title,
             )
-        if config.reverse_chapter_order:
-            chapters.reverse()
+        chapters = self._order_chapters(chapters)
         if metadata is None:
             metadata = NovelMetadata(
                 title=config.name,
@@ -114,6 +125,26 @@ class NovelCrawler:
                 site_name=config.name,
             )
         return metadata, chapters
+
+    def _order_chapters(self, chapters: list[ChapterLink]) -> list[ChapterLink]:
+        numbered = [
+            (detect_chapter_number(chapter.title), index, chapter)
+            for index, chapter in enumerate(chapters)
+        ]
+        if numbered and all(number is not None for number, _, _ in numbered):
+            def sort_key(item: tuple[int | None, int, ChapterLink]) -> tuple[int, int]:
+                number, index, _ = item
+                assert number is not None
+                return (-number if self.config.reverse_chapter_order else number, index)
+
+            return [
+                chapter
+                for _, _, chapter in sorted(numbered, key=sort_key)
+            ]
+
+        if self.config.reverse_chapter_order:
+            return list(reversed(chapters))
+        return chapters
 
     def crawl(
         self,
@@ -380,12 +411,56 @@ class NovelCrawler:
             author_node = soup.select_one(self.config.author_selector)
             if author_node:
                 author = normalize_text(author_node.get_text(" ", strip=True)) or None
+        illustration_url = self._extract_illustration_url(soup, source_url)
 
         return NovelMetadata(
             title=title,
             author=author,
             source_url=source_url,
             site_name=self.config.name,
+            illustration_url=illustration_url,
+        )
+
+    def _extract_illustration_url(self, soup: BeautifulSoup, source_url: str) -> str | None:
+        if not self.config.illustration_selector:
+            return None
+
+        node = soup.select_one(self.config.illustration_selector)
+        if node is None:
+            return None
+        image_node = node if node.name in ("img", "source", "meta", "link") else node.select_one("img")
+        if image_node is not None:
+            for attr in ("src", "data-src", "data-original", "data-url", "content", "href"):
+                value = image_node.get(attr)
+                if isinstance(value, str) and value.strip():
+                    return urljoin(source_url, value.strip())
+
+            srcset = image_node.get("srcset")
+            if isinstance(srcset, str) and srcset.strip():
+                first_candidate = srcset.split(",", 1)[0].strip().split(" ", 1)[0]
+                if first_candidate:
+                    return urljoin(source_url, first_candidate)
+
+        style = node.get("style")
+        if isinstance(style, str):
+            match = _CSS_URL.search(style)
+            if match:
+                url = match.group(2).strip()
+                if url:
+                    return urljoin(source_url, url)
+        return None
+
+    def _fetch_toc_page(self, url: str) -> FetchResponse:
+        if not self.config.toc_expand_selector:
+            return self.client.fetch(url)
+
+        fetch_with_clicks = getattr(self.client, "fetch_with_clicks", None)
+        if fetch_with_clicks is None:
+            raise FetchError("toc_expand_selector requires browser mode (-b/--browser).")
+        return fetch_with_clicks(
+            url,
+            [self.config.toc_expand_selector],
+            wait_for_selector=self.config.chapter_link_selector,
         )
 
     def _next_toc_url(self, soup: BeautifulSoup, current_url: str) -> str | None:

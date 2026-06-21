@@ -15,11 +15,29 @@ class FakeResponse:
     status = 200
 
 
+class FakeLocator:
+    def __init__(self, page: FakePage, selector: str) -> None:
+        self.page = page
+        self.selector = selector
+
+    @property
+    def first(self) -> FakeLocator:
+        return self
+
+    async def count(self) -> int:
+        return 1
+
+    async def click(self, *, timeout: int) -> None:
+        self.page.clicked_selectors.append(self.selector)
+
+
 class FakePage:
     def __init__(self, context: FakeContext) -> None:
         self.context = context
         self.url = ""
         self.closed = False
+        self.clicked_selectors: list[str] = []
+        self.wait_functions: list[tuple[str, object]] = []
 
     async def goto(self, url: str, *, wait_until: str) -> FakeResponse:
         self.url = url
@@ -38,10 +56,17 @@ class FakePage:
         return None
 
     async def content(self) -> str:
-        return f"<html>{self.url}</html>"
+        clicks = ",".join(self.clicked_selectors)
+        return f"<html>{self.url} {clicks}</html>"
 
     async def close(self) -> None:
         self.closed = True
+
+    def locator(self, selector: str) -> FakeLocator:
+        return FakeLocator(self, selector)
+
+    async def wait_for_function(self, expression: str, *, arg: object, timeout: int) -> None:
+        self.wait_functions.append((expression, arg))
 
 
 class FakeContext:
@@ -149,6 +174,28 @@ class BrowserFetcherTest(unittest.TestCase):
         self.assertTrue(context.closed)
         self.assertTrue(playwright.browser.closed)
         self.assertTrue(playwright.stopped)
+
+    def test_fetch_with_clicks_expands_page_before_reading_content(self) -> None:
+        playwright = FakePlaywright()
+        starter = FakePlaywrightStarter(playwright)
+
+        with (
+            patch("src.services.browser.async_playwright", return_value=starter),
+            BrowserFetcher(user_agent="test", delay_seconds=0) as fetcher,
+        ):
+            response = fetcher.fetch_with_clicks(
+                "https://example.test/toc",
+                ["text=Show all chapters"],
+                wait_for_selector=".chapters a",
+            )
+
+        page = playwright.browser.context.pages[0]
+        self.assertEqual(page.clicked_selectors, ["text=Show all chapters"])
+        self.assertEqual(
+            page.wait_functions[0][1],
+            {"selector": ".chapters a", "beforeCount": 1},
+        )
+        self.assertIn("text=Show all chapters", response.body)
 
     def test_rejects_zero_concurrency(self) -> None:
         with self.assertRaises(ValueError):

@@ -3,6 +3,7 @@
   "start_url": "https://example.com/novel/table-of-contents",
   "novel_title_selector": "h1",
   "author_selector": ".author",
+  "illustration_selector": ".book-cover img",
   "chapter_link_selector": ".chapter-list a",
   "toc_next_selector": "a.next",
   "chapter_title_selector": "h1",

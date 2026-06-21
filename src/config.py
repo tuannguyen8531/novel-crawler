@@ -73,7 +73,9 @@ class SiteConfig:
     version: int = 1
     novel_title_selector: str | None = None
     author_selector: str | None = None
+    illustration_selector: str | None = None
     toc_next_selector: str | None = None
+    toc_expand_selector: str | None = None
     chapter_title_selector: str | None = None
     remove_selectors: tuple[str, ...] = ()
     same_domain: bool = True
@@ -122,7 +124,9 @@ class SiteConfig:
             version=int(data.get("version", 1)),
             novel_title_selector=_optional_str(data.get("novel_title_selector")),
             author_selector=_optional_str(data.get("author_selector")),
+            illustration_selector=_optional_str(data.get("illustration_selector")),
             toc_next_selector=_optional_str(data.get("toc_next_selector")),
+            toc_expand_selector=_optional_str(data.get("toc_expand_selector")),
             chapter_title_selector=_optional_str(data.get("chapter_title_selector")),
             remove_selectors=tuple(str(selector) for selector in remove_selectors),
             same_domain=bool(data.get("same_domain", True)),
