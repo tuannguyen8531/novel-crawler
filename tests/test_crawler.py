@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import _thread
 import json
 import tempfile
 import threading
@@ -68,6 +69,29 @@ class SuccessfulClient:
         return FetchResponse(
             url=url,
             body="<h1>Chapter</h1><div class='content'>Succeed</div>",
+            content_type="text/html",
+        )
+
+
+class SlowChapterClient:
+    def __init__(self) -> None:
+        self.chapter_started = threading.Event()
+
+    def fetch(self, url: str) -> FetchResponse:
+        if url == "https://public.example/novel":
+            return FetchResponse(
+                url=url,
+                body="""
+                    <h1 class="title">Demo Novel</h1>
+                    <nav class="chapters"><a href="/c1">Chapter 1</a></nav>
+                """,
+                content_type="text/html",
+            )
+        self.chapter_started.set()
+        time.sleep(0.2)
+        return FetchResponse(
+            url=url,
+            body="<h1>Chapter 1</h1><div class='content'>Succeed</div>",
             content_type="text/html",
         )
 
@@ -273,12 +297,30 @@ class NovelCrawlerTest(unittest.TestCase):
         )
         self.assertEqual(shared_metadata, runtime_metadata)
         self.assertEqual(len(result.chapters), 2)
-        self.assertTrue(result.chapters[0].path.endswith("demo-novel/input/chapter_1.txt"))
+        self.assertTrue(result.chapters[0].path.endswith("demo/input/chapter_1.txt"))
         self.assertFalse(result.chapters[0].skipped)
         self.assertTrue(config_snapshot_exists)
         self.assertTrue(chapter_one.startswith("Chapter 1: Start\n\n"))
         self.assertIn("Hello world.", chapter_one)
         self.assertNotIn("Buy now.", chapter_one)
+
+    def test_crawl_uses_config_name_for_output_slug(self) -> None:
+        config = replace(demo_config(), name="flower-1981")
+        pages = demo_pages()
+        pages["https://public.example/novel"] = """
+            <h1 class="title">那年花开1981最新章节</h1>
+            <nav class="chapters"><a href="/c1">第1章 Start</a></nav>
+        """
+        crawler = NovelCrawler(config)
+        crawler.client = FakeClient(pages)  # type: ignore[arg-type]
+
+        with tempfile.TemporaryDirectory() as output:
+            output_path = Path(output)
+            result = crawler.crawl(output_path / "runtime", share_root=output_path / "share")
+
+        self.assertEqual(result.metadata.title, "那年花开1981最新章节")
+        self.assertEqual(Path(result.output_dir).name, "flower-1981")
+        self.assertEqual(Path(result.chapter_output_dir).parent.name, "flower-1981")
 
     def test_crawl_skips_existing_chapter_files_by_default(self) -> None:
         fake_client = FakeClient(demo_pages())
@@ -343,7 +385,7 @@ class NovelCrawlerTest(unittest.TestCase):
 
             def progress_callback(progress: CrawlProgress) -> None:
                 progress_events.append(progress)
-                manifest_path = output_path / "runtime" / "demo-novel" / "manifest.json"
+                manifest_path = output_path / "runtime" / "demo" / "manifest.json"
                 manifest_snapshots.append(json.loads(manifest_path.read_text(encoding="utf-8")))
 
             crawler.crawl(
@@ -353,7 +395,7 @@ class NovelCrawlerTest(unittest.TestCase):
             )
 
             final_manifest = json.loads(
-                (output_path / "runtime" / "demo-novel" / "manifest.json").read_text(
+                (output_path / "runtime" / "demo" / "manifest.json").read_text(
                     encoding="utf-8"
                 )
             )
@@ -402,7 +444,7 @@ class NovelCrawlerTest(unittest.TestCase):
             progress_snapshots: list[tuple[str, int, int]] = []
 
             def progress_callback(progress: CrawlProgress) -> None:
-                manifest_path = output_path / "runtime" / "demo-novel" / "manifest.json"
+                manifest_path = output_path / "runtime" / "demo" / "manifest.json"
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 progress_snapshots.append(
                     (progress.status, progress.current, manifest["completed_chapters"])
@@ -481,6 +523,43 @@ class NovelCrawlerTest(unittest.TestCase):
             )
 
         self.assertEqual(client.calls, ["https://public.example/c1"])
+
+    def test_keyboard_interrupt_writes_interrupted_manifest_and_shared_metadata(self) -> None:
+        crawler = NovelCrawler(demo_config())
+        client = SlowChapterClient()
+        crawler.client = client  # type: ignore[arg-type]
+
+        def interrupt_after_chapter_starts() -> None:
+            if client.chapter_started.wait(timeout=1):
+                time.sleep(0.05)
+                _thread.interrupt_main()
+
+        interrupter = threading.Thread(target=interrupt_after_chapter_starts, daemon=True)
+        with tempfile.TemporaryDirectory() as output:
+            output_path = Path(output)
+            interrupter.start()
+            with self.assertRaises(KeyboardInterrupt):
+                crawler.crawl(
+                    output_path / "runtime",
+                    share_root=output_path / "share",
+                    workers=1,
+                )
+            interrupter.join(timeout=1)
+
+            manifest = json.loads(
+                (output_path / "runtime" / "demo" / "manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            shared_metadata = json.loads(
+                (output_path / "share" / "demo" / "metadata.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(manifest["status"], "interrupted")
+        self.assertEqual(manifest["fetched_chapters"], 1)
+        self.assertEqual(shared_metadata["title"], "Demo Novel")
 
     def test_parallel_max_chapters_preserves_chapter_order(self) -> None:
         client = SuccessfulClient()

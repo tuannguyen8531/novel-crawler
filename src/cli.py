@@ -312,6 +312,9 @@ def _crawl(args: argparse.Namespace) -> int:
     except (OSError, ValueError, FetchError) as error:
         get_logger().error("Error: %s", error)
         return 1
+    except KeyboardInterrupt:
+        get_logger().warning("Interrupted. Progress saved.")
+        return 130
 
 
 def _crawl_with_fetcher(

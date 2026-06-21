@@ -55,8 +55,13 @@ class BrowserFetcher:
         self._start()
         return self
 
-    def __exit__(self, *args: object) -> None:
-        self.close()
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> None:
+        self.close(suppress_errors=exc_type is not None)
 
     def _start(self) -> None:
         with self._start_lock:
@@ -126,12 +131,20 @@ class BrowserFetcher:
                 args=launch_args,
             )
 
-    def close(self) -> None:
+    def close(self, *, suppress_errors: bool = False) -> None:
         with self._start_lock:
             if self._loop is None:
                 return
             try:
-                self._submit(self._async_close())
+                try:
+                    self._submit(self._async_close())
+                except Exception as error:
+                    if not suppress_errors:
+                        raise
+                    get_logger().debug(
+                        "Ignoring browser close error during exception cleanup: %s",
+                        error,
+                    )
             finally:
                 self._stop_event_loop()
 

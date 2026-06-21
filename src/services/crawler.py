@@ -130,7 +130,7 @@ class NovelCrawler:
         if not chapter_links:
             raise FetchError("No chapter links found. Check chapter_link_selector.")
 
-        novel_slug = slugify(metadata.title, fallback=slugify(self.config.name))
+        novel_slug = slugify(self.config.name)
         novel_dir = output_root / novel_slug
         if share_root:
             chapter_output_dir = share_root / novel_slug / "input"
@@ -145,6 +145,8 @@ class NovelCrawler:
         fetched_count = 0
 
         self._write_metadata(novel_dir / "metadata.json", metadata)
+        if share_root:
+            self._write_metadata(chapter_output_dir.parent / "metadata.json", metadata)
         self._write_json(novel_dir / "config.json", asdict(self.config))
         self._write_manifest(
             novel_dir / "manifest.json",
@@ -200,6 +202,7 @@ class NovelCrawler:
         effective_workers = 1 if fail_fast else workers
         next_chapter = 0
         pending: dict[Future[ChapterResult], tuple[int, ChapterLink]] = {}
+        attempted_chapters: dict[int, tuple[ChapterLink, Path]] = {}
 
         def _fill_pending(executor: ThreadPoolExecutor) -> None:
             nonlocal next_chapter
@@ -236,15 +239,17 @@ class NovelCrawler:
                     _write_running_manifest()
                     continue
 
+                attempted_chapters[index] = (chapter_link, chapter_path)
                 future = executor.submit(_fetch_chapter, index, chapter_link, chapter_path)
                 pending[future] = (index, chapter_link)
 
-        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+        executor = ThreadPoolExecutor(max_workers=effective_workers)
+        try:
             _fill_pending(executor)
             while pending:
                 completed, _ = wait(pending, return_when=FIRST_COMPLETED)
                 for future in completed:
-                    index, chapter_link = pending.pop(future)
+                    index, chapter_link = pending[future]
                     try:
                         result = future.result()
                     except Exception as error:
@@ -268,6 +273,7 @@ class NovelCrawler:
                         _write_running_manifest(status="failed" if fail_fast else "running")
                         if fail_fast:
                             raise
+                        pending.pop(future, None)
                     else:
                         results.append(result)
                         fetched_count += 1
@@ -281,7 +287,60 @@ class NovelCrawler:
                             path=result.path,
                         )
                         _write_running_manifest()
+                        pending.pop(future, None)
                 _fill_pending(executor)
+        except KeyboardInterrupt:
+            for future in pending:
+                future.cancel()
+            executor.shutdown(wait=True, cancel_futures=True)
+            for future, (index, chapter_link) in list(pending.items()):
+                if future.cancelled() or not future.done():
+                    continue
+                try:
+                    result = future.result()
+                except Exception as error:
+                    errors.append(
+                        {
+                            "index": index,
+                            "url": chapter_link.url,
+                            "error": str(error),
+                        }
+                    )
+                else:
+                    results.append(result)
+                    fetched_count += 1
+
+            recorded_indexes = {result.index for result in results}
+            for index, (chapter_link, chapter_path) in attempted_chapters.items():
+                if index in recorded_indexes:
+                    continue
+                if self._is_existing_chapter(chapter_path):
+                    results.append(
+                        ChapterResult(
+                            index=index,
+                            title=chapter_link.title,
+                            source_url=chapter_link.url,
+                            path=str(chapter_path),
+                        )
+                    )
+                    fetched_count += 1
+
+            results.sort(key=lambda r: r.index)
+            errors.sort(key=lambda error: error["index"])
+            self._write_manifest(
+                novel_dir / "manifest.json",
+                generated_at=generated_at,
+                status="interrupted",
+                metadata=metadata,
+                runtime_output_dir=novel_dir,
+                chapter_output_dir=chapter_output_dir,
+                chapter_links=chapter_links,
+                results=results,
+                errors=errors,
+            )
+            raise
+        finally:
+            executor.shutdown(wait=True)
 
         # Sort results by index so output is deterministic regardless of
         # parallel execution order.

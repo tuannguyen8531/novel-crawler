@@ -77,6 +77,11 @@ class FakeBrowser:
         self.closed = True
 
 
+class CloseFailingBrowser(FakeBrowser):
+    async def close(self) -> None:
+        raise RuntimeError("Connection closed while reading from the driver")
+
+
 class FakeChromium:
     def __init__(self, browser: FakeBrowser) -> None:
         self.browser = browser
@@ -171,6 +176,22 @@ class BrowserFetcherTest(unittest.TestCase):
             chromium.launch_kwargs[1]["executable_path"],
             "/usr/bin/google-chrome",
         )
+
+    def test_close_error_does_not_mask_keyboard_interrupt(self) -> None:
+        playwright = FakePlaywright()
+        playwright.browser = CloseFailingBrowser()
+        playwright.chromium = FakeChromium(playwright.browser)
+        starter = FakePlaywrightStarter(playwright)
+
+        with self.assertRaises(KeyboardInterrupt):
+            with (
+                patch("src.services.browser.async_playwright", return_value=starter),
+                BrowserFetcher(user_agent="test", delay_seconds=0),
+            ):
+                raise KeyboardInterrupt
+
+        self.assertTrue(playwright.browser.context.closed)
+        self.assertTrue(playwright.stopped)
 
 
 if __name__ == "__main__":
